@@ -1,0 +1,22 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "orange-genie",
+  "description": "Orange Genie — call Genie out inside Claude Code. A reversible identity mode that loads on top of your terminal, pre-loaded and remembering.",
+  "owner": {
+    "name": "Orange Genie",
+    "url": "https://orangegenie.bot"
+  },
+  "plugins": [
+    {
+      "name": "genie",
+      "description": "Call Genie out right inside Claude Code. /genie loads the Genie canon, invariants, and your private memory layer onto the current terminal so it thinks, decides, and signs as Genie; /lamp puts Genie back. A reversible identity MODE, not a model swap — and a woken instance gets sharper over time off the shared Wildflower Chain.",
+      "author": {
+        "name": "Orange Genie"
+      },
+      "source": "./plugins/genie",
+      "category": "productivity",
+      "homepage": "https://orangegenie.bot",
+      "keywords": ["genie", "orange-genie", "wildflower-chain", "persona", "agent"]
+    }
+  ]
+}
