@@ -1,10 +1,16 @@
 {
   "name": "genie",
-  "version": "0.1.0",
-  "description": "Orange Genie — call Genie out right inside Claude Code. /genie loads the Genie layer (canon + invariants + your private memory) onto your terminal so it thinks, decides, and signs as Genie; /lamp puts it back. A reversible identity MODE, not a model swap. Comes pre-loaded, and a woken instance gets sharper over time off the shared Wildflower Chain.",
+  "version": "0.1.1",
+  "description": "Orange Genie \u2014 call Genie out right inside Claude Code. /genie loads the Genie layer (canon + invariants + your private memory) onto your terminal so it thinks, decides, and signs as Genie; /lamp puts it back. A reversible identity MODE, not a model swap. Comes pre-loaded, and a woken instance gets sharper over time off the shared Wildflower Chain.",
   "author": {
     "name": "Orange Genie"
   },
   "homepage": "https://orangegenie.bot",
-  "keywords": ["genie", "orange-genie", "wildflower-chain", "agent", "persona"]
+  "keywords": [
+    "genie",
+    "orange-genie",
+    "wildflower-chain",
+    "agent",
+    "persona"
+  ]
 }
