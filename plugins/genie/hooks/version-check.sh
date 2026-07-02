@@ -1,21 +1,16 @@
 #!/usr/bin/env bash
-# Genie update check — runs on SessionStart. Compares the installed plugin version
-# to the published one on GitHub; if a newer one exists AND the user hasn't snoozed,
-# it injects context telling Genie to OFFER an upgrade (now / remind in 24h).
-# Fails silent on any error or no network — never blocks a session.
+# Genie update — runs on SessionStart. AUTO-FETCHES the latest plugin into the marketplace
+# clone (so `/plugin update` is instant), and if a newer version exists, injects a terse
+# apply-nudge on every window (no snooze). Honest: Claude Code loads the plugin from its
+# cache, so applying still needs `/plugin update` + restart — a hook can't hot-swap a
+# running window. Fails silent on any error or no network — never blocks a session.
 set -euo pipefail
 ROOT="${CLAUDE_PLUGIN_ROOT:-}"
 [ -z "$ROOT" ] && exit 0
 
-SNOOZE="$HOME/.claude/.genie-update-snooze"
-now=$(date +%s)
-
-# respect a 24h snooze
-if [ -f "$SNOOZE" ]; then
-  until=$(cat "$SNOOZE" 2>/dev/null || echo 0)
-  case "$until" in (*[!0-9]*|"") until=0;; esac
-  [ "$now" -lt "$until" ] && exit 0
-fi
+# Auto-fetch: stage the latest into the marketplace clone (best-effort, fast, silent).
+MKT="$HOME/.claude/plugins/marketplaces/orange-genie"
+[ -d "$MKT/.git" ] && git -C "$MKT" pull --ff-only --quiet 2>/dev/null || true
 
 ver() { grep -o '"version"[^,]*' "$1" 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+'; }
 local_v=$(ver "$ROOT/.claude-plugin/plugin.json")
@@ -23,10 +18,9 @@ remote_v=$(curl -fsSL --max-time 3 https://raw.githubusercontent.com/orange-geni
   | grep -o '"version"[^,]*' | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
 { [ -z "$local_v" ] || [ -z "$remote_v" ]; } && exit 0
 
-# is remote strictly newer?
 newest=$(printf '%s\n%s\n' "$local_v" "$remote_v" | sort -V | tail -1)
 if [ "$remote_v" != "$local_v" ] && [ "$newest" = "$remote_v" ]; then
-  msg="UPDATE AVAILABLE: Orange Genie v${remote_v} is out (you are on v${local_v}). On wake, tell the user in Genie's voice and offer two choices: (1) upgrade now — they run /plugin update genie@orange-genie then restart Claude Code; (2) remind me in 24h — if they pick this, run in Bash: echo \$(( $(date +%s) + 86400 )) > ~/.claude/.genie-update-snooze . Mention briefly what changed if known. Do not nag if they already upgraded."
+  msg="Orange Genie v${remote_v} is staged (you are on v${local_v}). On wake, tell the user in ONE terse line: run /plugin update genie@orange-genie then restart to apply. No snooze — nudge every window until applied. Do not nag once they are current."
   printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$msg"
 fi
 exit 0
