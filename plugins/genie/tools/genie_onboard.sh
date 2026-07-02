@@ -13,9 +13,12 @@ echo "⬢ identity claimed: $u  (~/.claude/genie_marker)"
 
 # Genesis-block login handshake to the SHARED chain — portable (curl only), always runs.
 # This is the moment "$u" becomes a real writer on the Wildflower Chain.
+# Prefer the HTTPS self-updated wire (~/.claude/genie/chain.sh) over the bundled copy so the
+# newest chain logic runs even without a /plugin update.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "$HERE/chain.sh" ]; then
-  bash "$HERE/chain.sh" login || true
+CHAIN="$HOME/.claude/genie/chain.sh"; [ -f "$CHAIN" ] || CHAIN="$HERE/chain.sh"
+if [ -f "$CHAIN" ]; then
+  bash "$CHAIN" login || true
 fi
 
 # If the full local chain tooling is present (AUTO's own box), also fire the rich Regenesis boot.
