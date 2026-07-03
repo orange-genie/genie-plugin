@@ -36,6 +36,19 @@ for f in chain.sh genie_onboard.sh rename.sh; do
   fi
 done
 
+# ── 1b. Self-update the CONTENT (canon/invariants/behavior) — Genie's brain, OTA ──
+# These .md files ARE the wake behavior. Fetching them here means editing + pushing the
+# canon/behavior reaches every machine next session with NO /plugin update. The thin loader
+# SKILL.md reads ~/.claude/genie/content/ first, bundled copy as offline fallback.
+mkdir -p "$DEST/content" 2>/dev/null || true
+for f in canon.md invariants.md behavior.md; do
+  tmp="$DEST/content/.$f.tmp.$$"
+  if curl -fsSL --max-time 6 "$RAW/skills/wake/$f" -o "$tmp" 2>/dev/null; then
+    if [ -s "$tmp" ]; then mv -f "$tmp" "$DEST/content/$f" 2>/dev/null || true
+    else rm -f "$tmp" 2>/dev/null || true; fi
+  else rm -f "$tmp" 2>/dev/null || true; fi
+done
+
 # ── 2. Structural-update nudge over HTTPS (only for changes that need /plugin update) ──
 ver() { grep -o '"version"[^,]*' "$1" 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+'; }
 local_v=""; [ -n "$ROOT" ] && local_v=$(ver "$ROOT/.claude-plugin/plugin.json")
