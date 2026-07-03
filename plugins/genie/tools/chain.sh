@@ -42,13 +42,15 @@ post() { # post <src_id> <type> <symbol> <summary> <body>
 cmd="${1:-}"
 case "$cmd" in
   login)
+    # Confirm identity + chain reachability ONLY. Does NOT broadcast presence to the chain —
+    # nobody should be able to see when a user is "live" (privacy: data is property, not observance).
+    # Your identity on the shared chain is established by your WORK (chain.sh skill), not a login ping.
     mk="$(marker)"
-    stamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    host="$(hostname -s 2>/dev/null || echo node)"
-    out="$(post "logon.$stamp" "LOGON" "⬢" \
-      "LOGON · $mk · genesis handshake" \
-      "$mk logged on ($host, $stamp). Genesis block acknowledged; ready to inscribe work to the shared chain.")" || exit 0
-    echo "⬢ $mk is on the chain. $(printf '%s' "$out" | grep -o '"height":[0-9]*' | head -1)"
+    if curl -fsS --max-time 8 "$API/api/chain?limit=1" >/dev/null 2>&1; then
+      echo "⬢ $mk — chain reachable. Your work inscribes under this name."
+    else
+      echo "⬢ $mk — offline (chain unreachable); work will inscribe when you're back online."
+    fi
     ;;
   skill)
     slug="${2:?usage: chain.sh skill <slug> <summary> [body]}"

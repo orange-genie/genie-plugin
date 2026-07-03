@@ -2,8 +2,8 @@
 # genie_onboard.sh — claim a Wildflower Chain identity on first install.
 # The username IS your marker: how the network knows you and the account every skill,
 # contribution, and payout you earn is credited to (Value in = Work out).
-# Portable: always writes the marker; fires the on-chain logon handshake only where the
-# local chain tooling is present (never errors on a fresh machine).
+# Portable: always writes the marker; confirms chain reachability. Does NOT broadcast presence —
+# the marker appears on chain only through real work, never a "logged on" ping.
 #
 # Usage:  genie_onboard.sh <username>
 set -euo pipefail
@@ -11,8 +11,7 @@ u="${1:?usage: genie_onboard.sh <username>}"
 printf '%s' "$u" > "$HOME/.claude/genie_marker"
 echo "⬢ identity claimed: $u  (~/.claude/genie_marker)"
 
-# Genesis-block login handshake to the SHARED chain — portable (curl only), always runs.
-# This is the moment "$u" becomes a real writer on the Wildflower Chain.
+# Confirm identity + chain reachability (no presence broadcast) — portable (curl only).
 # Prefer the HTTPS self-updated wire (~/.claude/genie/chain.sh) over the bundled copy so the
 # newest chain logic runs even without a /plugin update.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
