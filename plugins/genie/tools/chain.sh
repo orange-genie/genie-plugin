@@ -8,6 +8,8 @@
 # Usage:
 #   chain.sh login                         # genesis-block login handshake (announce presence)
 #   chain.sh skill <slug> <summary> [body] # inscribe a skill you built/learned
+#   chain.sh search <query> [limit]        # READ the chain: skills the commons already has
+#   chain.sh mine [limit]                  # READ the chain: skills already inscribed under YOUR marker
 #   chain.sh whoami                        # print this node's marker
 #
 # Marker resolution: ~/.claude/genie_marker if set, else <osuser>.agent.
@@ -39,6 +41,43 @@ post() { # post <src_id> <type> <symbol> <summary> <body>
     || { echo "⚠️  chain unreachable (work saved locally is unaffected)"; return 1; }
 }
 
+# read + filter the live chain client-side (the server has no query param; we pull recent blocks
+# and match locally). Args: <query|""> <limit> <only-mine:0|1> <marker>
+read_chain() {
+  local q lim mine mk
+  q="$1"; lim="${2:-200}"; mine="${3:-0}"; mk="$4"
+  curl -fsS --max-time 15 "$API/api/chain?limit=$lim" 2>/dev/null \
+    | Q="$q" MINE="$mine" MK="$mk" python3 -c '
+import json,sys,os
+q=os.environ.get("Q","").lower().strip()
+mine=os.environ.get("MINE","0")=="1"
+mk=os.environ.get("MK","").lower()
+try: blocks=json.load(sys.stdin).get("blocks",[])
+except Exception: print("(chain unreachable)"); sys.exit(0)
+# skills = real work; drop RENAME/LOGON/NODE bookkeeping from the readout
+def is_skill(b): return (b.get("type","") or "").upper() not in ("RENAME","LOGON","NODE","REGISTER")
+def hay(b):
+    d=b.get("data") or {}
+    return " ".join(str(x) for x in (b.get("summary"),b.get("body"),b.get("src"),b.get("type"),d.get("for"))).lower()
+rows=[]
+for b in blocks:
+    if not is_skill(b): continue
+    src=(b.get("src","") or "").lower()
+    if mine and src!=mk: continue
+    if q and q not in hay(b): continue
+    rows.append(b)
+if not rows:
+    print("mine: nothing under your marker yet — build one and it lands here." if mine
+          else "no matches on chain — this looks like a genuine gap worth building.")
+    sys.exit(0)
+for b in rows[:25]:
+    src=str(b.get("src","?")); summ=str(b.get("summary",""))[:72]
+    print("  ⬢ " + src.ljust(20) + " " + summ)
+scope=" under your marker" if mine else ""
+print("\n  (" + str(len(rows)) + " on chain" + scope + "; showing up to 25)")
+' 2>/dev/null || echo "  (chain unreachable — offline)"
+}
+
 cmd="${1:-}"
 case "$cmd" in
   login)
@@ -59,9 +98,21 @@ case "$cmd" in
     out="$(post "skill.$slug" "SKILL" "⬢" "$summary" "$body")" || exit 0
     echo "⬢ inscribed skill '$slug' as $(marker). $(printf '%s' "$out" | grep -o '"height":[0-9]*' | head -1)"
     ;;
+  search)
+    q="${2:?usage: chain.sh search <query> [limit]}"
+    lim="${3:-200}"
+    echo "⬢ chain · skills matching \"$q\":"
+    read_chain "$q" "$lim" 0 ""
+    ;;
+  mine)
+    lim="${2:-200}"
+    mk="$(marker)"
+    echo "⬢ chain · skills already inscribed under $mk:"
+    read_chain "" "$lim" 1 "$mk"
+    ;;
   whoami)
     echo "$(marker)"
     ;;
   *)
-    echo "usage: chain.sh {login | skill <slug> <summary> [body] | whoami}"; exit 1;;
+    echo "usage: chain.sh {login | skill <slug> <summary> [body] | search <query> [limit] | mine [limit] | whoami}"; exit 1;;
 esac
