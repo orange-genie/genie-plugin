@@ -22,7 +22,7 @@ mkdir -p "$DEST" 2>/dev/null || true
 
 # ── 1. Self-update the chain wire over HTTPS (the part that must reach EVERYONE) ──
 # Fetch to a temp file, sanity-check it's a real script, then atomically swap in.
-for f in chain.sh genie_onboard.sh rename.sh; do
+for f in chain.sh genie_onboard.sh rename.sh video.sh; do
   tmp="$DEST/.$f.tmp.$$"
   if curl -fsSL --max-time 6 "$RAW/tools/$f" -o "$tmp" 2>/dev/null; then
     if head -1 "$tmp" | grep -q '^#!'; then
