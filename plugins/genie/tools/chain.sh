@@ -173,39 +173,168 @@ EOF
     ;;
   install)
     # PULL a skill's package OFF the chain and install it into ~/.claude/skills/<slug>/.
-    # This is the read side of the store: the chain holds the skill's body (its SKILL.md),
-    # and any node can fetch + drop it in. (Legacy summary-only blocks have no package to install.)
+    # SECURITY MODEL (v2): a SKILL.md we write is instructions a Genie then READS AND EXECUTES,
+    # so a public Bazaar = anyone can publish a payload that compromises whoever installs it.
+    # This case is a QUARANTINE + INFORMED-CONSENT gate. NOTHING is written to ~/.claude/skills
+    # until a human at the terminal explicitly approves. Four defenses, all client-side (no key,
+    # no paid API, works today):
+    #   (1) CONSENT   — fetch to a temp sandbox, SHOW the full body (the exact text Genie would
+    #                   execute) + author + risk, require explicit approval BEFORE any write/enable.
+    #   (2) IDENTITY  — resolve the author's on-chain IDENTITY block (the X-verified mirror) →
+    #                   trust tier: verified (blue/business/gov) > connected > ANONYMOUS.
+    #   (3) INTEGRITY — recompute the block's own seal, sha256(prev|height|ts|summary|body), and
+    #                   compare to the stored hash. Mismatch = body altered since sealing → refuse.
+    #   (4) RISK SCAN — grep the body for shell/exec/exfil/persistence tokens (curl, wget, rm -rf,
+    #                   eval, base64 -d, sudo, chmod, launchctl, crontab, /dev/tcp, nc, mkfifo …)
+    #                   and show the offending lines. Presence escalates the approval friction.
+    # Friction ladder: clean+identified → [y/N]; anon-author OR shell present → type 'yes';
+    #   critical token → type the slug; integrity MISMATCH → type 'install anyway'. Default = NO.
+    # Non-interactive (no TTY, e.g. a hook) NEVER installs — consent can't be faked.
     slug="${2:?usage: chain.sh install <slug>}"
     dest="$HOME/.claude/skills/$slug"
-    body="$(curl -fsS --max-time 15 "$API/api/chain?limit=500" 2>/dev/null \
+    tmp="$(mktemp -d "${TMPDIR:-/tmp}/genie-install.XXXXXX")" || { echo "✗ cannot create sandbox"; exit 0; }
+    body_f="$tmp/body"; report_f="$tmp/report"; flags_f="$tmp/flags"
+    trap 'rm -rf "$tmp"' EXIT
+
+    curl -fsS --max-time 15 "$API/api/chain?limit=500" 2>/dev/null \
       | SLUG="$slug" python3 -c '
-import json,sys,os
+import json,sys,os,re,hashlib
 slug=os.environ["SLUG"].lower()
+body_f,report_f,flags_f=sys.argv[1],sys.argv[2],sys.argv[3]
 try: blocks=json.load(sys.stdin).get("blocks",[])
 except Exception: sys.exit(2)
+
 def matches(b):
     sid=str(b.get("src_id","")).lower(); summ=str(b.get("summary","")).lower()
     return sid.endswith("skill."+slug) or ("skill."+slug) in sid or slug in summ
 hits=[b for b in blocks if (b.get("type","")=="SKILL" and matches(b))]
-if not hits: sys.exit(3)                       # not found in the recent window
-b=sorted(hits, key=lambda x:x.get("height",0))[-1]   # newest match
+if not hits: sys.exit(3)                                  # not found in recent window
+b=sorted(hits, key=lambda x:x.get("height",0))[-1]        # newest match wins
 body=b.get("body") or ""
-sys.stderr.write((b.get("src","?")+"|"+str(b.get("height",""))+"|"+str(b.get("summary",""))[:70]))
-if not body.strip(): sys.exit(4)               # found, but no installable package
-sys.stdout.write(body)
-' 2>/tmp/.chain_install_meta)"
+author=str(b.get("src","?"))
+if not body.strip():
+    open(report_f,"w").write("author=%s (summary-only, no package)"%author); sys.exit(4)
+
+# ── (2) IDENTITY: newest IDENTITY block for this author ──
+ids=[x for x in blocks if str(x.get("type",""))=="IDENTITY" and str(x.get("src",""))==author]
+tier="anon"; badge=""; vlabel="ANONYMOUS — no verified identity on chain"; xh=""
+if ids:
+    idb=sorted(ids,key=lambda x:x.get("height",0))[-1]; d=idb.get("data") or {}
+    vt=str(d.get("verified_type","none")); xh=str(d.get("x_handle","")); badge=str(d.get("badge",""))
+    if vt in ("blue","business","government"):
+        tier="verified"; vlabel="X-VERIFIED (%s) as @%s"%(vt,xh)
+    else:
+        tier="connected"; vlabel="X-connected but UNVERIFIED as @%s"%xh
+
+# ── (3) INTEGRITY: recompute the server seal exactly ──
+prev=str(b.get("prev_hash","")); h=str(b.get("height","")); ts=str(b.get("ts","")); summ=str(b.get("summary",""))
+calc=hashlib.sha256(("%s|%s|%s|%s|%s"%(prev,h,ts,summ,body)).encode("utf-8")).hexdigest()
+stored=str(b.get("hash",""))
+integrity="ok" if (stored and calc==stored) else "bad"
+
+# provenance signals (real, computed — never fabricated)
+authored=sum(1 for x in blocks if str(x.get("type",""))=="SKILL" and str(x.get("src",""))==author)
+installs=sum(1 for x in blocks if str(x.get("type",""))=="INSTALL" and ("install."+slug) in str(x.get("src_id","")).lower())
+
+# ── (4) RISK SCAN ──
+CRIT=[("rm -rf / -f recursive delete", r"\brm\s+-[rfRF]"),("sudo escalation", r"\bsudo\b"),
+      ("base64 decode (hidden payload)", r"base64\s+(-d|--decode|-D)"),
+      ("pipe-to-shell", r"\|\s*(sh|bash|zsh)\b"),("eval", r"\beval\b"),
+      ("launchd persistence", r"launchctl|LaunchAgents|LaunchDaemons"),("cron persistence", r"\bcrontab\b"),
+      ("reverse shell", r"/dev/tcp|\bmkfifo\b|\bncat\b|\bnc\s+-"),("raw disk write", r"\bdd\s+if="),
+      ("world-writable chmod", r"chmod\s+(-R\s+)?[0-7]*7[0-7]{2}"),("fork bomb", r":\s*\(\s*\)\s*\{"),
+      ("ssh key access", r"\.ssh/|id_rsa|authorized_keys"),("write to system dir", r">\s*/(etc|Library|System)\b"),
+      ("secret exfil", r"AWS_SECRET|PRIVATE_KEY|MNEMONIC|SEED_PHRASE")]
+SHELL=[("network fetch", r"\bcurl\b|\bwget\b"),("chmod", r"\bchmod\b"),
+       ("inline interpreter", r"(python3?|node|perl|ruby)\s+-[ec]\b"),("applescript", r"\bosascript\b"),
+       ("background/detach", r"\bnohup\b|&\s*disown|&\s*$"),("file redirect write", r">\s*[~/$]")]
+lines=body.splitlines(); flagged=[]
+def scan(rules,sev):
+    for i,ln in enumerate(lines,1):
+        for label,pat in rules:
+            if re.search(pat,ln,re.I): flagged.append((sev,i,label,ln.strip()[:80]))
+scan(CRIT,"CRIT"); scan(SHELL,"SHELL")
+risk="critical" if any(s=="CRIT" for s,*_ in flagged) else ("shell" if flagged else "none")
+
+# ── write body (quarantined) + flags + human report ──
+open(body_f,"w").write(body)
+open(flags_f,"w").write("TIER=%s\nINTEGRITY=%s\nRISK=%s\n"%(tier,integrity,risk))
+R=[]
+R.append("\n  ━━━━━━━━━━━━━━━  INSTALL REVIEW · %s  ━━━━━━━━━━━━━━━"%slug)
+R.append("  author      : %s   %s %s"%(author,badge,vlabel))
+R.append("  provenance  : block #%s · sealed %s · %d skill(s) inscribed by this author"%(h,ts,authored))
+R.append("  install sig : %s"%("%d prior install receipt(s) on chain"%installs if installs else "none yet (new/unrated — judge on the code below)"))
+R.append("  integrity   : %s"%("✔ body matches the sealed on-chain hash" if integrity=="ok"
+         else "✘ MISMATCH — body does NOT match its seal; treat as TAMPERED"))
+if risk=="none":
+    R.append("  risk scan   : ✔ no shell / exec / exfil patterns found")
+else:
+    R.append("  risk scan   : %s %d flagged line(s) — this SKILL.md contains executable shell:"
+             %("⛔ CRITICAL:" if risk=="critical" else "⚠️  SHELL:",len(flagged)))
+    for sev,i,label,txt in flagged[:20]:
+        R.append("      [%s] L%d  %-26s  %s"%(sev,i,label,txt))
+R.append("  summary     : %s"%summ)
+R.append("  ─────────── SKILL.md body — THIS TEXT BECOMES INSTRUCTIONS GENIE READS & EXECUTES ───────────")
+prev_lines=lines if len(lines)<=200 else lines[:200]+["  … (%d more lines — full body written to sandbox) …"%(len(lines)-200)]
+for ln in prev_lines: R.append("  | "+ln)
+R.append("  ──────────────────────────────────────────────────────────────────────────────────────────")
+open(report_f,"w").write("\n".join(R)+"\n")
+' "$body_f" "$report_f" "$flags_f"
     rc=$?
-    meta="$(cat /tmp/.chain_install_meta 2>/dev/null)"; rm -f /tmp/.chain_install_meta
     case "$rc" in
       2) echo "✗ chain unreachable."; exit 0;;
-      3) echo "✗ no skill '$slug' found on the chain (recent window). A by-slug lookup for older skills is coming."; exit 0;;
-      4) echo "⚠️  '$slug' is on the chain (${meta%%|*}) but stored as a summary only — no installable package yet. Whoever inscribed it needs to include the full SKILL.md in the body."; exit 0;;
+      3) echo "✗ no skill '$slug' found on the chain (recent window)."; exit 0;;
+      4) echo "⚠️  '$slug' is on the chain but stored as a summary only — no installable package. Whoever inscribed it must include the full SKILL.md in the body."; exit 0;;
     esac
+
+    # SHOW the review (author + verified tier + integrity + risk + full body)
+    cat "$report_f"
+
+    # load flags
+    TIER=anon; INTEGRITY=bad; RISK=critical
+    # shellcheck disable=SC1090
+    . "$flags_f" 2>/dev/null || true
+
+    # a human MUST be present — never install from a non-interactive context
+    if [ ! -e /dev/tty ]; then
+      echo "  ✗ no interactive terminal — refusing to install '$slug' without human approval."; exit 0
+    fi
+
+    # friction ladder — default is always NO
+    need=""; prompt=""
+    if [ "$INTEGRITY" = "bad" ]; then
+      need="install anyway"; prompt="  ✘ INTEGRITY FAILED. To override a tamper warning, type exactly \`install anyway\` (or anything else to abort): "
+    elif [ "$RISK" = "critical" ]; then
+      need="$slug"; prompt="  ⛔ CRITICAL shell patterns above. To proceed, retype the slug \`$slug\` (or anything else to abort): "
+    elif [ "$RISK" = "shell" ] || [ "$TIER" = "anon" ]; then
+      need="yes"; prompt="  ⚠️  $( [ "$TIER" = anon ] && echo 'ANONYMOUS author' || echo 'contains shell' ). Type \`yes\` to install, anything else to abort: "
+    else
+      prompt="  Install '$slug' by $TIER author? [y/N]: "
+    fi
+
+    printf '%s' "$prompt"
+    IFS= read -r answer </dev/tty || answer=""
+    ok=0
+    if [ -n "$need" ]; then
+      [ "$answer" = "$need" ] && ok=1
+    else
+      case "$answer" in y|Y|yes|YES) ok=1;; esac
+    fi
+    if [ "$ok" != "1" ]; then echo "  ✗ aborted — nothing written."; exit 0; fi
+
+    # APPROVED → now (and only now) write to the skills dir
     mkdir -p "$dest"
     [ -f "$dest/SKILL.md" ] && cp "$dest/SKILL.md" "$dest/SKILL.md.bak" 2>/dev/null || true
-    printf '%s' "$body" > "$dest/SKILL.md"
-    echo "⬢ installed skill '$slug' → $dest/SKILL.md  (from chain: ${meta})"
-    echo "   restart Claude Code (or /reload) to pick it up."
+    cp "$body_f" "$dest/SKILL.md"
+    echo "  ⬢ installed '$slug' → $dest/SKILL.md"
+    echo "     restart Claude Code (or /reload) to pick it up."
+
+    # OPT-IN, privacy-respecting: publish an install receipt so honest ratings can accrue.
+    # Off by default (installs are private, like login). Set GENIE_INSTALL_RECEIPTS=1 to help rate.
+    if [ "${GENIE_INSTALL_RECEIPTS:-0}" = "1" ]; then
+      post "install.$slug" "INSTALL" "⇩" "installed $slug" "" >/dev/null 2>&1 \
+        && echo "     (install receipt published — thanks for feeding the rating signal)"
+    fi
     ;;
   whoami)
     echo "$(marker)"
