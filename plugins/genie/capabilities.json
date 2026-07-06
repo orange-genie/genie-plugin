@@ -1,0 +1,126 @@
+{
+  "_doc": "The Genie capability manifest \u2014 every agent AUTO built, exposed as a plugin skill. cost tags: 'free' = local compute, no COGS, never gated. 'metered' = burns OUR paid credits \u2192 free_per_day free uses (daily reset), then the user must BYOK for that provider. 'gated:money' = touches funds \u2192 NEVER auto-runs, explicit AUTO/owner yes only (money-gate). Edit this file to add/retag agents; run tools/wrap_agents.py to regenerate the SKILL.md set.",
+  "default_free_per_day": 5,
+  "default_credit_cost": 1,
+  "capabilities": [
+    {
+      "name": "recall",
+      "cost": "free",
+      "cmd": "bash \"$CLAUDE_PLUGIN_ROOT/tools/chain.sh\" search",
+      "triggers": "recall, search my memory/chain, 'have we done X', find a skill, echo the void",
+      "summary": "Search the shared Wildflower Chain for a skill/answer. Networked (works on any machine), free.",
+      "creator_marker": "orangegenie",
+      "price_per_call": 0.0
+    },
+    {
+      "name": "inscribe",
+      "cost": "free",
+      "cmd": "bash \"$CLAUDE_PLUGIN_ROOT/tools/chain.sh\" skill",
+      "triggers": "save this skill to chain, inscribe, record what I learned, put it on the chain",
+      "summary": "Write a skill/idea to the shared chain under your marker. Near-free.",
+      "creator_marker": "orangegenie",
+      "price_per_call": 0.0
+    },
+    {
+      "name": "pm-runner",
+      "cost": "metered",
+      "provider": "anthropic",
+      "cmd": "python3 ~/Genie/bots/pm-runner/videogenie.py",
+      "triggers": "PM coaching, plan this project, research + draft, product-manager advice, break down a roadmap",
+      "summary": "Google-PM-methodology runner: ask/research/draft. Uses Claude.",
+      "creator_marker": "orangegenie",
+      "price_per_call": 0.0
+    },
+    {
+      "name": "video-genie",
+      "cost": "metered",
+      "provider": "anthropic",
+      "cmd": "zsh ~/Genie/_video_build/build_video.sh",
+      "triggers": "make a video, build a promo clip, generate a branded video, caption + stitch clips",
+      "summary": "Branded video maker: generates captions + stitches clips into an .mp4 (ffmpeg). Caption gen uses Claude.",
+      "creator_marker": "orangegenie",
+      "price_per_call": 0.0
+    },
+    {
+      "name": "sales-copilot",
+      "cost": "metered",
+      "provider": "anthropic",
+      "cmd": "python3 ~/Genie/bots/sales-copilot/copilot.py",
+      "triggers": "write a sales pitch, outreach, cold DM, proposal draft, close this lead",
+      "summary": "Drafts outreach / proposals / follow-ups. Uses Claude.",
+      "creator_marker": "orangegenie",
+      "price_per_call": 0.0
+    },
+    {
+      "name": "upwork-agent",
+      "cost": "metered",
+      "provider": "anthropic",
+      "cmd": "python3 ~/Genie/bots/upwork-agent/propose.py",
+      "triggers": "find upwork gigs, draft a proposal for this job, bid, freelance leads",
+      "summary": "Scouts + drafts Upwork proposals. Uses Claude.",
+      "creator_marker": "orangegenie",
+      "price_per_call": 0.0
+    },
+    {
+      "name": "email-concierge",
+      "cost": "metered",
+      "provider": "anthropic",
+      "cmd": "python3 ~/Genie/bots/gmail-concierge/gmail_concierge.py",
+      "triggers": "triage my inbox, draft a reply, summarize emails, handle my mail",
+      "summary": "Reads/triages/drafts email (Google auth managed; drafting uses Claude).",
+      "creator_marker": "orangegenie",
+      "price_per_call": 0.0
+    },
+    {
+      "name": "meeting-notes",
+      "cost": "metered",
+      "provider": "anthropic",
+      "cmd": "python3 ~/Genie/tools/meeting_report.py",
+      "triggers": "summarize this meeting, action items, meeting notes, recap the call",
+      "summary": "Turns a meeting/transcript into notes + action items. Uses Claude.",
+      "creator_marker": "orangegenie",
+      "price_per_call": 0.0
+    },
+    {
+      "name": "botfactory",
+      "cost": "metered",
+      "provider": "anthropic",
+      "cmd": "python3 ~/Genie/bots/botfactory/factory.py",
+      "triggers": "spin up a bot, make me an agent, build a custom worker",
+      "summary": "Spins up a new task-specific bot. Uses Claude.",
+      "creator_marker": "orangegenie",
+      "price_per_call": 0.0
+    },
+    {
+      "name": "workshop-team",
+      "cost": "metered",
+      "provider": "anthropic",
+      "cmd": "python3 ~/Genie/bots/workshop-team/copy_gen.py",
+      "triggers": "run the team, multi-agent workshop, get a panel on this",
+      "summary": "Multi-agent panel/workshop over a problem. Uses Claude (fans out).",
+      "creator_marker": "orangegenie",
+      "price_per_call": 0.0
+    },
+    {
+      "name": "chart-intel",
+      "cost": "metered",
+      "provider": "helius",
+      "cmd": "node ~/Genie/bots/orangegenie-chart-backend/server.js",
+      "triggers": "chart this token, on-chain read, wallet flow, convergence check",
+      "summary": "On-chain chart + flow intel. Uses paid RPC (Helius).",
+      "creator_marker": "orangegenie",
+      "price_per_call": 0.0
+    },
+    {
+      "name": "trade",
+      "cost": "gated:money",
+      "cmd": "python3 ~/Genie/bots/pumpgo-agent/pumpgo.py",
+      "triggers": "trade, buy, sell, swap, ape, exit",
+      "summary": "\u26d4 MONEY-GATE: touches funds. NEVER auto-runs \u2014 explicit owner yes per action, BYOK wallet only.",
+      "creator_marker": "orangegenie",
+      "price_per_call": 0.0
+    }
+  ],
+  "platform_marker": "orangegenie",
+  "take_rate": 0.2
+}
