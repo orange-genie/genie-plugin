@@ -171,9 +171,45 @@ EOF
     echo "⬢ chain · skills already inscribed under $mk:"
     read_chain "" "$lim" 1 "$mk"
     ;;
+  install)
+    # PULL a skill's package OFF the chain and install it into ~/.claude/skills/<slug>/.
+    # This is the read side of the store: the chain holds the skill's body (its SKILL.md),
+    # and any node can fetch + drop it in. (Legacy summary-only blocks have no package to install.)
+    slug="${2:?usage: chain.sh install <slug>}"
+    dest="$HOME/.claude/skills/$slug"
+    body="$(curl -fsS --max-time 15 "$API/api/chain?limit=500" 2>/dev/null \
+      | SLUG="$slug" python3 -c '
+import json,sys,os
+slug=os.environ["SLUG"].lower()
+try: blocks=json.load(sys.stdin).get("blocks",[])
+except Exception: sys.exit(2)
+def matches(b):
+    sid=str(b.get("src_id","")).lower(); summ=str(b.get("summary","")).lower()
+    return sid.endswith("skill."+slug) or ("skill."+slug) in sid or slug in summ
+hits=[b for b in blocks if (b.get("type","")=="SKILL" and matches(b))]
+if not hits: sys.exit(3)                       # not found in the recent window
+b=sorted(hits, key=lambda x:x.get("height",0))[-1]   # newest match
+body=b.get("body") or ""
+sys.stderr.write((b.get("src","?")+"|"+str(b.get("height",""))+"|"+str(b.get("summary",""))[:70]))
+if not body.strip(): sys.exit(4)               # found, but no installable package
+sys.stdout.write(body)
+' 2>/tmp/.chain_install_meta)"
+    rc=$?
+    meta="$(cat /tmp/.chain_install_meta 2>/dev/null)"; rm -f /tmp/.chain_install_meta
+    case "$rc" in
+      2) echo "✗ chain unreachable."; exit 0;;
+      3) echo "✗ no skill '$slug' found on the chain (recent window). A by-slug lookup for older skills is coming."; exit 0;;
+      4) echo "⚠️  '$slug' is on the chain (${meta%%|*}) but stored as a summary only — no installable package yet. Whoever inscribed it needs to include the full SKILL.md in the body."; exit 0;;
+    esac
+    mkdir -p "$dest"
+    [ -f "$dest/SKILL.md" ] && cp "$dest/SKILL.md" "$dest/SKILL.md.bak" 2>/dev/null || true
+    printf '%s' "$body" > "$dest/SKILL.md"
+    echo "⬢ installed skill '$slug' → $dest/SKILL.md  (from chain: ${meta})"
+    echo "   restart Claude Code (or /reload) to pick it up."
+    ;;
   whoami)
     echo "$(marker)"
     ;;
   *)
-    echo "usage: chain.sh {login | skill <slug> <summary> [body] | queue <slug> <summary> [body] | sync | search <query> [limit] | mine [limit] | whoami}"; exit 1;;
+    echo "usage: chain.sh {login | skill <slug> <summary> [body] | queue <slug> <summary> [body] | sync | search <query> [limit] | mine [limit] | install <slug> | whoami}"; exit 1;;
 esac
