@@ -38,8 +38,28 @@ facts=""
 [ -n "$skills" ] && facts="${facts} The shared Wildflower Chain has ${skills} skills reachable."
 [ -n "$height" ] && facts="${facts} Current chain height is ${height}."
 
+# ── 3b. Chain write-loop readouts: receipts landed + catch-net for missed staging ──
+GENIE_DIR="$HOME/.claude/genie"
+writeloop=""
+# Skills that actually landed since the user last saw a receipt (report + reset the marker).
+if [ -f "$GENIE_DIR/inscribed.log" ]; then
+  seen=0; [ -f "$GENIE_DIR/.receipts_seen" ] && seen="$(cat "$GENIE_DIR/.receipts_seen" 2>/dev/null || echo 0)"
+  total="$(wc -l < "$GENIE_DIR/inscribed.log" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+  new=$(( total - seen )); [ "$new" -lt 0 ] && new=0
+  [ "$new" -gt 0 ] && writeloop="${writeloop} ${new} of the user's skills landed on the chain since last session — mention it as their attribution growing."
+  printf '%s' "$total" > "$GENIE_DIR/.receipts_seen" 2>/dev/null || true
+fi
+# Catch-net: last session built things but staged nothing → have this (LLM) Genie recover it.
+if [ -f "$GENIE_DIR/unstaged_work.json" ]; then
+  tp="$(python3 -c 'import json;print(json.load(open("'"$GENIE_DIR"'/unstaged_work.json")).get("transcript",""))' 2>/dev/null || true)"
+  if [ -n "$tp" ] && [ -f "$tp" ]; then
+    writeloop="${writeloop} IMPORTANT: last session produced real work but staged 0 skills to the chain. Early in this session, read the tail of the transcript at ${tp}, and for anything genuinely reusable (a technique, a working fix, a capability) run \`chain.sh queue <slug> <summary> <body>\` so it inscribes at session end. Apply the quality gate — recreate-able skills only, no chatter."
+  fi
+  rm -f "$GENIE_DIR/unstaged_work.json" 2>/dev/null || true
+fi
+
 read -r -d '' MSG <<EOF || true
-Open this session by greeting the user by name in the Orange Genie voice. Their Wildflower Chain marker (their name on the network) is "${marker}". If your memory holds a preferred name for this user, use that; otherwise use the marker, capitalized. One warm, terse line then a question — e.g. "Hey ${marker} — Genie's up, chain's warm. What are we building?".${facts} State ONLY the numbers given in the previous sentence; if none were given, do not invent any — just say the chain is warm. Do not recite open tasks. If a version-update nudge is present in this session's context, append it as ONE terse line after the greeting.
+Open this session by greeting the user by name in the Orange Genie voice. Their Wildflower Chain marker (their name on the network) is "${marker}". If your memory holds a preferred name for this user, use that; otherwise use the marker, capitalized. One warm, terse line then a question — e.g. "Hey ${marker} — Genie's up, chain's warm. What are we building?".${facts} State ONLY the numbers given in the previous sentence; if none were given, do not invent any — just say the chain is warm. Do not recite open tasks. If a version-update nudge is present in this session's context, append it as ONE terse line after the greeting.${writeloop}
 EOF
 
 printf '%s' "$MSG" | python3 -c '
