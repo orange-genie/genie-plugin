@@ -5,10 +5,10 @@
 # so real users inscribed ~nothing (the live chain proved it: 2 SKILL blocks, both test pokes).
 # Now the model only has to STAGE a skill during the session (`chain.sh queue …` — a trivial local
 # append). This hook fires deterministically when the session ends and does the real network write
-# (`chain.sh drain`). Propose (model) is decoupled from write (hook), so a staged skill ALWAYS lands.
+# (`chain.sh sync`). Propose (model) is decoupled from write (hook), so a staged skill ALWAYS lands.
 #
 # Guarantees & guardrails:
-#   • Bounded: chain.sh drain caps at GENIE_DRAIN_CAP skills, curl --max-time per write. No hang.
+#   • Bounded: chain.sh sync caps at GENIE_SYNC_CAP skills, curl --max-time per write. No hang.
 #   • NEVER backgrounds (no & / nohup / disown) — honors the no-backgrounding-in-hooks rule.
 #   • Empty queue → instant silent no-op (no noise on trivial sessions).
 #   • Always exits 0 and never emits a block decision → cannot loop or wedge the session.
@@ -22,10 +22,10 @@ GENIE_DIR="$HOME/.claude/genie"
 QUEUE_FILE="$GENIE_DIR/pending_skills.jsonl"
 FLAG_FILE="$GENIE_DIR/unstaged_work.json"     # "did real work, staged nothing" → greet nudges next wake
 
-# Did the model stage anything this session? (check BEFORE drain empties the queue)
+# Did the model stage anything this session? (check BEFORE sync empties the queue)
 had_queue=0; [ -s "$QUEUE_FILE" ] && had_queue=1
 
-# Prefer the self-updated HTTPS wire so the newest drain logic runs even without a /plugin update;
+# Prefer the self-updated HTTPS wire so the newest sync logic runs even without a /plugin update;
 # fall back to the copy bundled with this plugin version.
 CHAIN="$GENIE_DIR/chain.sh"
 if [ ! -f "$CHAIN" ]; then
@@ -35,9 +35,9 @@ fi
 # 1) Deterministic WRITE of everything staged. Bounded by chain.sh; belt-and-suspenders wall-time cap.
 if [ -f "$CHAIN" ]; then
   if command -v timeout >/dev/null 2>&1; then
-    timeout 45 bash "$CHAIN" drain 2>&1 || true
+    timeout 45 bash "$CHAIN" sync 2>&1 || true
   else
-    bash "$CHAIN" drain 2>&1 || true
+    bash "$CHAIN" sync 2>&1 || true
   fi
 fi
 

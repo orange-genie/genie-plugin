@@ -8,14 +8,14 @@
 # Usage:
 #   chain.sh login                         # genesis-block login handshake (announce presence)
 #   chain.sh skill <slug> <summary> [body] # inscribe a skill you built/learned (immediate network write)
-#   chain.sh queue <slug> <summary> [body] # STAGE a skill locally (instant, offline-safe) — the Stop hook drains it
-#   chain.sh drain                         # inscribe everything staged in the queue (called by the Stop hook)
+#   chain.sh queue <slug> <summary> [body] # STAGE a skill locally (instant, offline-safe) — the Stop hook syncs it
+#   chain.sh sync                         # inscribe everything staged in the queue (called by the Stop hook)
 #   chain.sh search <query> [limit]        # READ the chain: skills the commons already has
 #   chain.sh mine [limit]                  # READ the chain: skills already inscribed under YOUR marker
 #   chain.sh whoami                        # print this node's marker
 #
 # The write loop (why skills actually land): during a session the Genie STAGES each reusable skill
-# with `queue` — a trivial, local, always-succeeds append. At session end the Stop hook runs `drain`,
+# with `queue` — a trivial, local, always-succeeds append. At session end the Stop hook runs `sync`,
 # which does the real network inscription under the marker. Propose (model, cheap) is decoupled from
 # write (hook, deterministic), so a skill lands even if the model never composed a curl itself.
 #
@@ -28,7 +28,7 @@ MARKER_FILE="$HOME/.claude/genie_marker"
 QUEUE_FILE="$HOME/.claude/genie/pending_skills.jsonl"   # staged, not-yet-inscribed skills
 RETRY_FILE="$HOME/.claude/genie/failed_skills.jsonl"    # writes that failed the network call (kept for retry)
 RECEIPT_FILE="$HOME/.claude/genie/inscribed.log"        # what actually landed (greet.sh reports this next wake)
-DRAIN_CAP="${GENIE_DRAIN_CAP:-5}"                        # max skills inscribed per drain (keeps the Stop hook bounded)
+SYNC_CAP="${GENIE_SYNC_CAP:-5}"                        # max skills inscribed per sync (keeps the Stop hook bounded)
 
 marker() {
   if [ -f "$MARKER_FILE" ]; then
@@ -119,7 +119,7 @@ case "$cmd" in
     fi
     ;;
   queue)
-    # STAGE a skill locally — instant, offline-safe, cannot fail. The Stop hook drains it later.
+    # STAGE a skill locally — instant, offline-safe, cannot fail. The Stop hook syncs it later.
     slug="${2:?usage: chain.sh queue <slug> <summary> [body]}"
     summary="${3:?usage: chain.sh queue <slug> <summary> [body]}"
     body="${4:-}"
@@ -127,9 +127,9 @@ case "$cmd" in
     printf '{"slug":%s,"summary":%s,"body":%s}\n' "$(esc "$slug")" "$(esc "$summary")" "$(esc "$body")" >> "$QUEUE_FILE"
     echo "⬢ staged skill '$slug' — it inscribes to the chain when this session ends."
     ;;
-  drain)
+  sync)
     # Inscribe everything staged (queue + any prior failures), under the marker. Idempotent: the
-    # server dedups by src_id (skill.<slug>), so a re-drain never double-writes. Bounded by DRAIN_CAP.
+    # server dedups by src_id (skill.<slug>), so a re-sync never double-writes. Bounded by SYNC_CAP.
     mkdir -p "$(dirname "$QUEUE_FILE")"
     src_lines=""
     [ -s "$QUEUE_FILE" ] && src_lines="$(cat "$QUEUE_FILE")"
@@ -140,7 +140,7 @@ case "$cmd" in
     ok=0; fail=0; n=0
     while IFS= read -r line; do
       [ -z "$line" ] && continue
-      n=$((n+1)); [ "$n" -gt "$DRAIN_CAP" ] && { printf '%s\n' "$line" >> "$RETRY_FILE"; continue; }
+      n=$((n+1)); [ "$n" -gt "$SYNC_CAP" ] && { printf '%s\n' "$line" >> "$RETRY_FILE"; continue; }
       slug="$(printf '%s' "$line" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("slug",""))' 2>/dev/null)"
       summary="$(printf '%s' "$line" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("summary",""))' 2>/dev/null)"
       body="$(printf '%s' "$line" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("body",""))' 2>/dev/null)"
@@ -154,7 +154,7 @@ case "$cmd" in
     done <<EOF
 $src_lines
 EOF
-    : > "$QUEUE_FILE"                 # queue fully consumed; failures live in RETRY_FILE for next drain
+    : > "$QUEUE_FILE"                 # queue fully consumed; failures live in RETRY_FILE for next sync
     [ "$ok" -gt 0 ] && echo "⬢ inscribed $ok skill(s) under $(marker)."
     [ "$fail" -gt 0 ] && echo "✗ $fail skill(s) failed to land — kept for retry next session." >&2
     exit 0
@@ -175,5 +175,5 @@ EOF
     echo "$(marker)"
     ;;
   *)
-    echo "usage: chain.sh {login | skill <slug> <summary> [body] | queue <slug> <summary> [body] | drain | search <query> [limit] | mine [limit] | whoami}"; exit 1;;
+    echo "usage: chain.sh {login | skill <slug> <summary> [body] | queue <slug> <summary> [body] | sync | search <query> [limit] | mine [limit] | whoami}"; exit 1;;
 esac
