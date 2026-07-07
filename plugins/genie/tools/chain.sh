@@ -447,9 +447,48 @@ PY
       echo "✗ rating didn't land (chain write failed)." >&2; exit 0
     fi
     ;;
+  collab)
+    # Third-party prompting: a HOST opens a room, guests drop prompts, the host's Genie pulls + runs
+    # them. Credit is automatic — skills inscribe under the HOST's marker (this node). SECURITY: the
+    # host approves each incoming prompt (Ask-each) and guest prompts still hit YOUR money/risk gates;
+    # the room code is a revocable bearer — share it only with someone you're working with.
+    ROOM_FILE="$HOME/.claude/genie/collab_room"; mkdir -p "$(dirname "$ROOM_FILE")"
+    sub="${2:-}"
+    case "$sub" in
+      open)
+        out="$(curl -fsS --max-time 12 -X POST "$API/api/collab/room" -H 'Content-Type: application/json' \
+               -d "{\"host_marker\":$(esc "$(marker)")}" 2>/dev/null)" || { echo "⚠️  chain unreachable"; exit 0; }
+        room="$(printf '%s' "$out" | grep -o '"room":"[a-f0-9]*"' | head -1 | cut -d'"' -f4)"
+        [ -n "$room" ] && { printf '%s' "$room" > "$ROOM_FILE"; echo "⬢ collab room OPEN as $(marker). Share this code (revoke anytime): $room"; echo "   Incoming prompts credit YOU; you approve each one. Turn it off with: chain.sh collab off"; } \
+                       || echo "✗ could not open room: $out"
+        ;;
+      send)
+        room="${3:?usage: chain.sh collab send <room> \"<prompt>\"}"; prompt="${4:?usage: chain.sh collab send <room> \"<prompt>\"}"
+        out="$(curl -fsS --max-time 12 -X POST "$API/api/collab/send" -H 'Content-Type: application/json' \
+               -d "{\"room\":$(esc "$room"),\"from\":$(esc "$(marker)"),\"prompt\":$(esc "$prompt")}" 2>/dev/null)" || { echo "⚠️  chain unreachable"; exit 0; }
+        printf '%s' "$out" | grep -q '"ok":true' && echo "→ sent to room $room (credit goes to the host)." || echo "✗ $out"
+        ;;
+      pull)
+        # the HOST's Genie calls this between turns; prints pending third-party prompts for approval
+        room="${3:-$(cat "$ROOM_FILE" 2>/dev/null)}"; [ -n "$room" ] || { echo "no open room (chain.sh collab open first)"; exit 0; }
+        curl -fsS --max-time 12 "$API/api/collab/pull?room=$room&host_marker=$(marker)" 2>/dev/null \
+          | python3 -c 'import json,sys
+try: ps=json.load(sys.stdin).get("prompts",[])
+except Exception: print("(collab unreachable)"); sys.exit(0)
+if not ps: print("(no pending third-party prompts)"); sys.exit(0)
+for p in ps: print("⚑ THIRD-PARTY PROMPT from "+str(p.get("from"))+" — APPROVE before running:\n   "+str(p.get("prompt"))[:400]+"\n")' 2>/dev/null
+        ;;
+      off)
+        room="$(cat "$ROOM_FILE" 2>/dev/null)"
+        [ -n "$room" ] && curl -fsS --max-time 10 -X POST "$API/api/collab/revoke" -H 'Content-Type: application/json' -d "{\"room\":$(esc "$room"),\"host_marker\":$(esc "$(marker)")}" >/dev/null 2>&1
+        rm -f "$ROOM_FILE"; echo "⬢ collab OFF — room revoked, no more third-party prompts."
+        ;;
+      *) echo "usage: chain.sh collab {open | send <room> \"<prompt>\" | pull | off}";;
+    esac
+    ;;
   whoami)
     echo "$(marker)"
     ;;
   *)
-    echo "usage: chain.sh {login | skill <slug> <summary> [body] | queue <slug> <summary> [body] | sync | search <query> [limit] | mine [limit] | install <slug> | pack <slug> | rate <slug> <1-5> | whoami}"; exit 1;;
+    echo "usage: chain.sh {login | skill <slug> <summary> [body] | queue <slug> <summary> [body] | sync | search <query> [limit] | mine [limit] | install <slug> | pack <slug> | rate <slug> <1-5> | collab {open|send|pull|off} | whoami}"; exit 1;;
 esac
