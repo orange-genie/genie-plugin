@@ -30,7 +30,8 @@ The substrate generalizes to ~12 verticals of predation. Build it **integrated**
 
 ## LOCKED VOCABULARY (use these exact names)
 
-- **Wildflower Chain** — the engine. Always "Chain," never bare "Wildflower."
+- **Wildflower Chain** — the **engine** (the append-only ledger + wire + identity network). Always "Chain" for the tech/provenance ("inscribed on the Chain"), never bare "Wildflower."
+- **Wildflower Bazaar** — the **storefront** users browse/install/rate/sell skills on (the former OrangeScan explorer). Bazaar = what people shop; Chain = what it runs on. Use "Bazaar" for the product surface, "Chain" for the engine underneath.
 - **Chain Temperature** (🔴🟠🟡🟢🔵) — live mood-ring. **Never "Trust Score."**
 - **Foxtails** — labeled wallets. **Kurama mode** — 9-vector bloom when a marked wallet moves. **The Seal** — every gate/filter/classifier; built strict from day one, no "tighten later."
 - **Spirit particles** — every tx is one. **Fable karma** — do bad, get bad points.
