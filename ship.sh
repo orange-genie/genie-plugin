@@ -49,7 +49,7 @@ echo "✓ shipped v$new -> autoUpdate clients pull it next session"
 # marketplace-add path tempts windows to flip it public — this snaps it
 # back on every ship so a drift can never silently persist. If we ever
 # decide to distribute publicly, change this line deliberately, once.
-vis="$(gh repo view orange-genie/genie-plugin --json visibility -q .visibility 2>/dev/null || echo '?')"
+vis="$(gh repo view orange-genie/genie-plugin --json visibility -q .visibility 2>/dev/null | tr 'A-Z' 'a-z' || echo '?')"
 if [ "$vis" != "private" ]; then
   echo "⚠ repo visibility was '$vis' — forcing back to PRIVATE" >&2
   gh repo edit orange-genie/genie-plugin --visibility private --accept-visibility-change-consequences >/dev/null 2>&1 \
