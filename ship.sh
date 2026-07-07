@@ -45,16 +45,19 @@ git push -q origin main
 echo "✓ shipped v$new -> autoUpdate clients pull it next session"
 
 # ── VISIBILITY GUARD ─────────────────────────────────────────────
-# genie-plugin MUST stay PRIVATE (AUTO, 2026-07-06). The self-update /
-# marketplace-add path tempts windows to flip it public — this snaps it
-# back on every ship so a drift can never silently persist. If we ever
-# decide to distribute publicly, change this line deliberately, once.
+# genie-plugin MUST stay PUBLIC (AUTO, 2026-07-07). The self-update
+# (raw.githubusercontent) + `/plugin marketplace add` install path only
+# work on a PUBLIC repo. The credit drain that once motivated privacy was
+# the Helius Atlas WebSocket, NOT repo scrapers — so there's no cost reason
+# to hide it. This snaps it back public if a window ever re-privatizes it.
+# The SAUCE stays out of this repo (server/wildflower-genesis/PMBot_v1 are
+# separate PRIVATE repos); keep it that way — scrub before committing here.
 vis="$(gh repo view orange-genie/genie-plugin --json visibility -q .visibility 2>/dev/null | tr 'A-Z' 'a-z' || echo '?')"
-if [ "$vis" != "private" ]; then
-  echo "⚠ repo visibility was '$vis' — forcing back to PRIVATE" >&2
-  gh repo edit orange-genie/genie-plugin --visibility private --accept-visibility-change-consequences >/dev/null 2>&1 \
-    && echo "✓ visibility re-asserted: private" \
-    || echo "✗ could not force private — do it by hand" >&2
+if [ "$vis" != "public" ]; then
+  echo "⚠ repo visibility was '$vis' — forcing back to PUBLIC (install needs it)" >&2
+  gh repo edit orange-genie/genie-plugin --visibility public --accept-visibility-change-consequences >/dev/null 2>&1 \
+    && echo "✓ visibility re-asserted: public" \
+    || echo "✗ could not force public — do it by hand" >&2
 else
-  echo "✓ visibility ok: private"
+  echo "✓ visibility ok: public"
 fi
