@@ -196,14 +196,14 @@ EOF
     slug="${2:?usage: chain.sh install <slug>}"
     dest="$HOME/.claude/skills/$slug"
     tmp="$(mktemp -d "${TMPDIR:-/tmp}/genie-install.XXXXXX")" || { echo "✗ cannot create sandbox"; exit 0; }
-    body_f="$tmp/body"; report_f="$tmp/report"; flags_f="$tmp/flags"
+    body_f="$tmp/body"; report_f="$tmp/report"; flags_f="$tmp/flags"; pkg_d="$tmp/pkg"
     trap 'rm -rf "$tmp"' EXIT
 
     curl -fsS --max-time 15 "$API/api/chain?limit=500" 2>/dev/null \
       | SLUG="$slug" python3 -c '
-import json,sys,os,re,hashlib
+import json,sys,os,re,hashlib,gzip,base64
 slug=os.environ["SLUG"].lower()
-body_f,report_f,flags_f=sys.argv[1],sys.argv[2],sys.argv[3]
+body_f,report_f,flags_f,pkg_d=sys.argv[1],sys.argv[2],sys.argv[3],sys.argv[4]
 try: blocks=json.load(sys.stdin).get("blocks",[])
 except Exception: sys.exit(2)
 
@@ -235,6 +235,35 @@ calc=hashlib.sha256(("%s|%s|%s|%s|%s"%(prev,h,ts,summ,body)).encode("utf-8")).he
 stored=str(b.get("hash",""))
 integrity="ok" if (stored and calc==stored) else "bad"
 
+# ── BUNDLE (multi-file): the files-map hash must be CHAIN-ANCHORED in the sealed body ──
+pack=(b.get("data") or {}).get("pack") or {}
+bundle={}; bundle_ok=False; bundle_note=""
+if isinstance(pack,dict) and pack.get("v")=="wfpk1":
+    try:
+        if pack.get("enc")=="plain": bundle=pack.get("files") or {}
+        elif pack.get("enc")=="gz": bundle=json.loads(gzip.decompress(base64.b64decode(pack["gz"])).decode())
+    except Exception: bundle={}
+    canon=json.dumps(bundle,sort_keys=True,ensure_ascii=False)
+    calc_pack=hashlib.sha256(canon.encode()).hexdigest()
+    m=re.search(r"wfpk-sha256:([0-9a-f]{64})",body); anchor=m.group(1) if m else ""
+    bundle_ok = bool(bundle) and integrity=="ok" and calc_pack==str(pack.get("sha256")) and calc_pack==anchor
+    bundle_note = ("%d files · sha chain-anchored ✔"%len(bundle) if bundle_ok else
+                   "bundle failed to decode" if not bundle else
+                   "NO anchored hash in sealed body — unauthenticated" if not anchor else
+                   "files DO NOT match the sealed hash — TAMPERED")
+    if not bundle_ok: integrity="bad"     # unverifiable bundle → tamper tier
+    if bundle:                             # write to sandbox (path-traversal guarded) for scan + install
+        os.makedirs(pkg_d,exist_ok=True)
+        base=os.path.realpath(pkg_d)
+        for rel,content in bundle.items():
+            safe=os.path.normpath(str(rel).lstrip("/"))
+            if safe.startswith("..") or os.path.isabs(safe): continue     # reject escape / absolute
+            fp=os.path.join(pkg_d,safe)
+            if not os.path.realpath(os.path.dirname(fp)).startswith(base): continue  # symlink/escape guard
+            os.makedirs(os.path.dirname(fp) or pkg_d,exist_ok=True)
+            try: open(fp,"w",encoding="utf-8").write(str(content))
+            except Exception: pass
+
 # provenance signals (real, computed — never fabricated)
 authored=sum(1 for x in blocks if str(x.get("type",""))=="SKILL" and str(x.get("src",""))==author)
 installs=sum(1 for x in blocks if str(x.get("type",""))=="INSTALL" and ("install."+slug) in str(x.get("src_id","")).lower())
@@ -251,7 +280,9 @@ CRIT=[("rm -rf / -f recursive delete", r"\brm\s+-[rfRF]"),("sudo escalation", r"
 SHELL=[("network fetch", r"\bcurl\b|\bwget\b"),("chmod", r"\bchmod\b"),
        ("inline interpreter", r"(python3?|node|perl|ruby)\s+-[ec]\b"),("applescript", r"\bosascript\b"),
        ("background/detach", r"\bnohup\b|&\s*disown|&\s*$"),("file redirect write", r">\s*[~/$]")]
-lines=body.splitlines(); flagged=[]
+lines=body.splitlines()                      # scan the body AND every bundled file — scripts execute too
+for rel,c in bundle.items(): lines.append("### file: "+rel); lines+=str(c).splitlines()
+flagged=[]
 def scan(rules,sev):
     for i,ln in enumerate(lines,1):
         for label,pat in rules:
@@ -261,7 +292,7 @@ risk="critical" if any(s=="CRIT" for s,*_ in flagged) else ("shell" if flagged e
 
 # ── write body (quarantined) + flags + human report ──
 open(body_f,"w").write(body)
-open(flags_f,"w").write("TIER=%s\nINTEGRITY=%s\nRISK=%s\n"%(tier,integrity,risk))
+open(flags_f,"w").write("TIER=%s\nINTEGRITY=%s\nRISK=%s\nBUNDLE=%s\n"%(tier,integrity,risk,"1" if bundle_ok else ("bad" if bundle else "0")))
 R=[]
 R.append("\n  ━━━━━━━━━━━━━━━  INSTALL REVIEW · %s  ━━━━━━━━━━━━━━━"%slug)
 R.append("  author      : %s   %s %s"%(author,badge,vlabel))
@@ -269,6 +300,7 @@ R.append("  provenance  : block #%s · sealed %s · %d skill(s) inscribed by thi
 R.append("  install sig : %s"%("%d prior install receipt(s) on chain"%installs if installs else "none yet (new/unrated — judge on the code below)"))
 R.append("  integrity   : %s"%("✔ body matches the sealed on-chain hash" if integrity=="ok"
          else "✘ MISMATCH — body does NOT match its seal; treat as TAMPERED"))
+if pack: R.append("  bundle      : %s (%s)"%("✔ multi-file, verified" if bundle_ok else "✘ UNVERIFIED",bundle_note))
 if risk=="none":
     R.append("  risk scan   : ✔ no shell / exec / exfil patterns found")
 else:
@@ -282,7 +314,7 @@ prev_lines=lines if len(lines)<=200 else lines[:200]+["  … (%d more lines — 
 for ln in prev_lines: R.append("  | "+ln)
 R.append("  ──────────────────────────────────────────────────────────────────────────────────────────")
 open(report_f,"w").write("\n".join(R)+"\n")
-' "$body_f" "$report_f" "$flags_f"
+' "$body_f" "$report_f" "$flags_f" "$pkg_d"
     rc=$?
     case "$rc" in
       2) echo "✗ chain unreachable."; exit 0;;
@@ -328,8 +360,13 @@ open(report_f,"w").write("\n".join(R)+"\n")
     # APPROVED → now (and only now) write to the skills dir
     mkdir -p "$dest"
     [ -f "$dest/SKILL.md" ] && cp "$dest/SKILL.md" "$dest/SKILL.md.bak" 2>/dev/null || true
-    cp "$body_f" "$dest/SKILL.md"
-    echo "  ⬢ installed '$slug' → $dest/SKILL.md"
+    if [ -d "$pkg_d" ] && [ -n "$(ls -A "$pkg_d" 2>/dev/null)" ]; then
+      cp -R "$pkg_d"/. "$dest"/                 # multi-file bundle (verified) → install every file
+      echo "  ⬢ installed '$slug' ($(find "$pkg_d" -type f | wc -l | tr -d ' ') files) → $dest/"
+    else
+      cp "$body_f" "$dest/SKILL.md"             # legacy single-file (body → SKILL.md)
+      echo "  ⬢ installed '$slug' → $dest/SKILL.md"
+    fi
     echo "     restart Claude Code (or /reload) to pick it up."
 
     # OPT-IN, privacy-respecting: publish an install receipt so honest ratings can accrue.
