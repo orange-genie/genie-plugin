@@ -43,3 +43,18 @@ git add -A
 git commit -q -m "ship: $new" || { echo "✗ nothing to commit" >&2; exit 1; }
 git push -q origin main
 echo "✓ shipped v$new -> autoUpdate clients pull it next session"
+
+# ── VISIBILITY GUARD ─────────────────────────────────────────────
+# genie-plugin MUST stay PRIVATE (AUTO, 2026-07-06). The self-update /
+# marketplace-add path tempts windows to flip it public — this snaps it
+# back on every ship so a drift can never silently persist. If we ever
+# decide to distribute publicly, change this line deliberately, once.
+vis="$(gh repo view orange-genie/genie-plugin --json visibility -q .visibility 2>/dev/null || echo '?')"
+if [ "$vis" != "private" ]; then
+  echo "⚠ repo visibility was '$vis' — forcing back to PRIVATE" >&2
+  gh repo edit orange-genie/genie-plugin --visibility private --accept-visibility-change-consequences >/dev/null 2>&1 \
+    && echo "✓ visibility re-asserted: private" \
+    || echo "✗ could not force private — do it by hand" >&2
+else
+  echo "✓ visibility ok: private"
+fi
