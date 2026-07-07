@@ -42,11 +42,14 @@ marker() {
 esc() { printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' 2>/dev/null \
         || printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"; }
 
-post() { # post <src_id> <type> <symbol> <summary> <body>
-  local mk sid typ sym sum bod
-  mk="$(marker)"; sid="$1"; typ="$2"; sym="$3"; sum="$4"; bod="${5:-}"
+post() { # post <src_id> <type> <symbol> <summary> <body> [data_json]
+  local mk sid typ sym sum bod dat
+  mk="$(marker)"; sid="$1"; typ="$2"; sym="$3"; sum="$4"; bod="${5:-}"; dat="${6:-}"
   local payload
-  payload="{\"marker\":$(esc "$mk"),\"src_id\":$(esc "$sid"),\"type\":$(esc "$typ"),\"symbol\":$(esc "$sym"),\"summary\":$(esc "$sum"),\"body\":$(esc "$bod")}"
+  payload="{\"marker\":$(esc "$mk"),\"src_id\":$(esc "$sid"),\"type\":$(esc "$typ"),\"symbol\":$(esc "$sym"),\"summary\":$(esc "$sum"),\"body\":$(esc "$bod")"
+  # data is a raw JSON object (already valid JSON), not an escaped string — append only if given
+  [ -n "$dat" ] && payload="$payload,\"data\":$dat"
+  payload="$payload}"
   curl -fsS --max-time 12 -X POST "$API/api/chain/node-inscribe" \
        -H 'Content-Type: application/json' -d "$payload" 2>/dev/null \
     || { echo "⚠️  chain unreachable (work saved locally is unaffected)"; return 1; }
@@ -334,6 +337,64 @@ open(report_f,"w").write("\n".join(R)+"\n")
     if [ "${GENIE_INSTALL_RECEIPTS:-0}" = "1" ]; then
       post "install.$slug" "INSTALL" "⇩" "installed $slug" "" >/dev/null 2>&1 \
         && echo "     (install receipt published — thanks for feeding the rating signal)"
+    fi
+    ;;
+  pack)
+    # Pack a multi-file skill dir into ONE chain block: files-map in data.pack (legible JSON,
+    # gz fallback), a SKILL.md preview in body. INTEGRITY: the files-map sha256 is written into
+    # the SEALED body (<!-- wfpk-sha256:H -->) — so the server seal over `body` chain-anchors it.
+    # (data.pack.sha256 alone is forgeable; a rewrite of `data` isn't covered by the seal.)
+    slug="${2:?usage: chain.sh pack <slug>}"
+    root="$HOME/.claude/skills/$slug"
+    [ -d "$root" ] || { echo "✗ no skill dir: $root"; exit 1; }
+    packed="$(SLUG="$slug" ROOT="$root" python3 - <<'PY'
+import json, gzip, base64, hashlib, os, sys
+slug=os.environ["SLUG"]; root=os.environ["ROOT"]
+MAXF=200_000; SKIP={".git","__pycache__","node_modules",".DS_Store"}
+files={}; execs=[]
+for dp,dns,fns in os.walk(root):
+    dns[:]=[d for d in dns if d not in SKIP]
+    for fn in fns:
+        if fn=="SKILL.md.bak" or fn.startswith("."): continue
+        ap=os.path.join(dp,fn); rel=os.path.relpath(ap,root).replace(os.sep,"/")
+        if os.path.getsize(ap)>MAXF: sys.stderr.write("file too big: %s\n"%rel); sys.exit(4)
+        raw=open(ap,"rb").read()
+        try: txt=raw.decode("utf-8")
+        except UnicodeDecodeError: sys.stderr.write("binary file %s — text only\n"%rel); sys.exit(5)
+        files[rel]=txt
+        if os.access(ap,os.X_OK): execs.append(rel)
+if "SKILL.md" not in files: sys.stderr.write("no SKILL.md in %s\n"%root); sys.exit(3)
+canon=json.dumps(files,sort_keys=True,ensure_ascii=False)
+sha=hashlib.sha256(canon.encode()).hexdigest()
+setup=""
+sp=os.path.join(root,"setup.line")
+if os.path.isfile(sp): setup=open(sp).read().strip()
+pack={"v":"wfpk1","slug":slug,"sha256":sha,"exec":sorted(execs),"setup":setup}
+CAP=15200
+if len(json.dumps(dict(pack,enc="plain",files=files),ensure_ascii=False))<=CAP:
+    pack.update(enc="plain",files=files)
+else:
+    gz=base64.b64encode(gzip.compress(canon.encode(),9)).decode()
+    if len(json.dumps(dict(pack,enc="gz",gz=gz),ensure_ascii=False))>CAP:
+        sys.stderr.write("too large for one block even gzipped\n"); sys.exit(6)
+    pack.update(enc="gz",gz=gz)
+# INTEGRITY FIX: anchor the files-map hash inside the SEALED body.
+body=files["SKILL.md"][:5900].rstrip()+"\n\n<!-- wfpk-sha256:"+sha+" files:"+str(len(files))+" -->\n"
+summ=next((l.strip("# ").strip() for l in files["SKILL.md"].splitlines()
+           if l.strip() and not l.strip().startswith("---")), slug)[:200]
+print(json.dumps({"summary":summ,"body":body,"data":{"pack":pack}},ensure_ascii=False))
+PY
+)" || { echo "✗ pack failed for '$slug' (see reason above)."; exit 0; }
+    summary="$(printf '%s' "$packed" | python3 -c 'import json,sys;print(json.load(sys.stdin)["summary"])')"
+    body="$(printf '%s'    "$packed" | python3 -c 'import json,sys;print(json.load(sys.stdin)["body"])')"
+    data="$(printf '%s'    "$packed" | python3 -c 'import json,sys;print(json.dumps(json.load(sys.stdin)["data"]))')"
+    mkdir -p "$(dirname "$RECEIPT_FILE")"
+    if out="$(post "skill.$slug" "SKILL" "⬢" "$summary" "$body" "$data")"; then
+      h="$(printf '%s' "$out" | grep -o '"height":[0-9]*' | head -1)"
+      echo "⬢ packed + inscribed multi-file skill '$slug' as $(marker). $h"
+      printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$slug" "$h" >> "$RECEIPT_FILE"
+    else
+      echo "✗ '$slug' did NOT land (chain write failed)." >&2; exit 0
     fi
     ;;
   whoami)
