@@ -434,9 +434,22 @@ PY
       echo "✗ '$slug' did NOT land (chain write failed)." >&2; exit 0
     fi
     ;;
+  rate)
+    # Rate a Bazaar skill 1-5★. One rating per marker per slug: src_id is rate.<slug>, so the
+    # server dedups by (src, src_id) → re-rating supersedes your own, you can't stuff the ballot.
+    slug="${2:?usage: chain.sh rate <slug> <1-5>}"
+    stars="${3:?usage: chain.sh rate <slug> <1-5>}"
+    case "$stars" in 1|2|3|4|5) : ;; *) echo "✗ stars must be 1-5"; exit 1;; esac
+    data="{\"slug\":$(esc "$slug"),\"stars\":$stars}"
+    if out="$(post "rate.$slug" "RATING" "★" "RATING · $slug · ${stars}★" "" "$data")"; then
+      echo "★ rated '$slug' ${stars}/5 as $(marker). $(printf '%s' "$out" | grep -o '"height":[0-9]*' | head -1)"
+    else
+      echo "✗ rating didn't land (chain write failed)." >&2; exit 0
+    fi
+    ;;
   whoami)
     echo "$(marker)"
     ;;
   *)
-    echo "usage: chain.sh {login | skill <slug> <summary> [body] | queue <slug> <summary> [body] | sync | search <query> [limit] | mine [limit] | install <slug> | whoami}"; exit 1;;
+    echo "usage: chain.sh {login | skill <slug> <summary> [body] | queue <slug> <summary> [body] | sync | search <query> [limit] | mine [limit] | install <slug> | pack <slug> | rate <slug> <1-5> | whoami}"; exit 1;;
 esac
