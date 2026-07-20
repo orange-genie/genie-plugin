@@ -23,28 +23,117 @@
 # Override the API base with GENIE_API (default = the live orange-genie API).
 set -euo pipefail
 
+# Portable Python. Nodes differ: Linux/mac ship `python3`; Windows/git-bash often has only the
+# `py` launcher (`py -3`) or a bare `python`. Every JSON helper below was hardcoded to `python3`
+# and suffixed `2>/dev/null`, so on a box without `python3` on PATH they failed SILENTLY —
+# `mine`/`sync` returned empty and the slug never parsed. Resolve ONE interpreter once, here.
+if command -v python3 >/dev/null 2>&1; then PY="python3"
+elif command -v python  >/dev/null 2>&1; then PY="python"
+elif command -v py      >/dev/null 2>&1; then PY="py -3"
+else echo "chain.sh: no Python interpreter found (need python3, python, or py)" >&2; exit 1
+fi
+
 API="${GENIE_API:-https://orangegenie-api-production.up.railway.app}"
 MARKER_FILE="$HOME/.claude/genie_marker"
 QUEUE_FILE="$HOME/.claude/genie/pending_skills.jsonl"   # staged, not-yet-inscribed skills
 RETRY_FILE="$HOME/.claude/genie/failed_skills.jsonl"    # writes that failed the network call (kept for retry)
 RECEIPT_FILE="$HOME/.claude/genie/inscribed.log"        # what actually landed (greet.sh reports this next wake)
+# THE FLYWHEEL LIVES HERE. An inscribed skill used to be invisible to the brain: retrieval indexes
+# mansion/vaults/*.md cards, and the chain is a DIFFERENT store — so knowledge went to the chain and
+# died there. (Proved 2026-07-12: genie-1 got a question wrong about a bug we had solved AND
+# inscribed the same day, height 1742.) We mirror every SUCCESSFUL inscribe here, at write time,
+# while we still hold the body; brain.py indexes this alongside skills.db, so a skill learned this
+# minute is retrievable on the next call. Inscribe -> mirror -> index -> answer. Loop closed.
+MIRROR_FILE="$HOME/.claude/genie/chain_skills.jsonl"    # local mirror of what THIS node inscribed
 SYNC_CAP="${GENIE_SYNC_CAP:-5}"                        # max skills inscribed per sync (keeps the Stop hook bounded)
 
+# Marker resolution, most-specific first. The global file is ONE per machine, so it alone
+# cannot run two project genies side by side — $GENIE_MARKER and ./.genie_marker give each
+# project instance its own identity on the same box. The server forces src=marker on every
+# write, so an instance can only ever inscribe as itself.
 marker() {
-  if [ -f "$MARKER_FILE" ]; then
-    local m; m="$(tr -d '[:space:]' < "$MARKER_FILE" 2>/dev/null || true)"
+  local m
+  if [ -n "${GENIE_MARKER:-}" ]; then
+    printf '%s' "$(printf '%s' "$GENIE_MARKER" | tr -d '[:space:]')"; return
+  fi
+  if [ -f ".genie_marker" ]; then
+    m="$(tr -d '[:space:]' < ".genie_marker" 2>/dev/null || true)"
     [ -n "$m" ] && { printf '%s' "$m"; return; }
   fi
-  printf '%s.agent' "$(id -un 2>/dev/null || echo node)"
+  if [ -f "$MARKER_FILE" ]; then
+    m="$(tr -d '[:space:]' < "$MARKER_FILE" 2>/dev/null || true)"
+    [ -n "$m" ] && { printf '%s' "$m"; return; }
+  fi
+  # UNNAMED node → author as the shared 'genie' commons (FREE for everyone), NOT the OS login
+  # name. Publishing `$(id -un).agent` once leaked the machine's account name to the public chain
+  # as if it were a person — an author is CHOSEN (genie_onboard.sh), never inferred from the OS.
+  # Work inscribed as genie carries a claim token (see node_commit), so the real author can later
+  # CLAIM it and flip authorship to their own .agent. Free until claimed.
+  printf 'genie'
 }
 
+# A private, per-node claim secret — generated once, chmod 600, NEVER printed/logged/echoed
+# (First Law: a user's secret is held to the same bar as an API key). Its sha256 is the public
+# COMMIT that rides on every commons (genie-authored) inscription; presenting the secret to
+# /api/chain/claim is what proves ownership and flips authorship genie→your .agent.
+NODE_SECRET_FILE="$HOME/.claude/genie/node_secret"
+node_secret() {
+  if [ ! -s "$NODE_SECRET_FILE" ]; then
+    mkdir -p "$(dirname "$NODE_SECRET_FILE")"
+    ( umask 077; head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$NODE_SECRET_FILE" )
+    chmod 600 "$NODE_SECRET_FILE" 2>/dev/null || true
+  fi
+  cat "$NODE_SECRET_FILE"
+}
+# sha256 of stdin, portable across macOS and Linux/ARM. Nodes differ: macOS ships `shasum`
+# (perl); Debian/Raspberry Pi OS Lite often ships ONLY `sha256sum` (coreutils) with no perl.
+# This used to be a bare `shasum -a 256 2>/dev/null`, which on a Pi returned an EMPTY commit
+# instead of failing — the node would inscribe work with no provable authorship and nothing
+# would say so. Silence is the bug; a missing hasher must be loud.
+sha256_hex() {
+  if   command -v shasum    >/dev/null 2>&1; then shasum -a 256 | awk '{print $1}'
+  elif command -v sha256sum >/dev/null 2>&1; then sha256sum     | awk '{print $1}'
+  elif command -v openssl   >/dev/null 2>&1; then openssl dgst -sha256 | awk '{print $NF}'
+  else
+    echo "chain.sh: no sha256 tool (need shasum, sha256sum, or openssl) — authorship cannot be proven" >&2
+    return 1
+  fi
+}
+node_commit() { printf '%s' "$(node_secret)" | sha256_hex; }
+
 # json-escape a string (portable: no jq dependency)
-esc() { printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' 2>/dev/null \
+esc() { printf '%s' "$1" | $PY -c 'import json,sys; print(json.dumps(sys.stdin.read()))' 2>/dev/null \
         || printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"; }
 
 post() { # post <src_id> <type> <symbol> <summary> <body> [data_json]
   local mk sid typ sym sum bod dat
   mk="$(marker)"; sid="$1"; typ="$2"; sym="$3"; sum="$4"; bod="${5:-}"; dat="${6:-}"
+  # --- MARKER NORMALIZATION + PRIVACY GUARD (all users, non-negotiable) -----------------------
+  # The server requires a fully-qualified marker (name.agent/.genie/.wtf/.com/.eth/.bot). Qualify
+  # bare markers so writes are accepted. The unnamed/commons author is 'genie.genie' — the '.genie'
+  # suffix reads as GENIE and signals a FREE skill (vs '.agent' = a paid, owned agent). NEVER derive
+  # a marker from the OS account.
+  case "$mk" in
+    ""|"genie"|"Genie") mk="genie.genie" ;;
+    *.agent|*.genie|*.wtf|*.com|*.eth|*.bot) : ;;   # already qualified — leave a CHOSEN handle alone
+    *) mk="${mk}.agent" ;;                            # qualify a bare CHOSEN handle
+  esac
+  # HARD BLOCK (fail closed): the public chain must NEVER carry the machine's login name as an
+  # identity. If the marker's local-part equals the OS account, refuse to inscribe — do not leak.
+  local _oslogin _localpart; _oslogin="$(id -un 2>/dev/null)"; _localpart="${mk%%.*}"
+  if [ -n "$_oslogin" ] && [ "$_localpart" = "$_oslogin" ]; then
+    echo "⛔ refusing to inscribe: marker '$mk' matches this machine's login name — publishing it" >&2
+    echo "   would leak private info to the PUBLIC chain. Choose a marker (genie_onboard.sh) or set" >&2
+    echo "   GENIE_MARKER to a name that is not your OS account. Nothing was sent." >&2
+    return 1
+  fi
+  # -------------------------------------------------------------------------------------------
+  # Commons-claim: if authoring under the shared 'genie.genie' marker (unnamed node) and the caller
+  # didn't supply a data blob, attach a claim token so this free skill stays CLAIMABLE by its
+  # real author. The commit is a hash of the private node secret — never the secret itself.
+  if [ "$mk" = "genie.genie" ] && [ -z "$dat" ]; then
+    dat="{\"claim\":{\"v\":1,\"commit\":$(esc "$(node_commit)"),\"hint\":\"node\"}}"
+  fi
   local payload
   payload="{\"marker\":$(esc "$mk"),\"src_id\":$(esc "$sid"),\"type\":$(esc "$typ"),\"symbol\":$(esc "$sym"),\"summary\":$(esc "$sum"),\"body\":$(esc "$bod")"
   # data is a raw JSON object (already valid JSON), not an escaped string — append only if given
@@ -61,7 +150,7 @@ read_chain() {
   local q lim mine mk
   q="$1"; lim="${2:-200}"; mine="${3:-0}"; mk="$4"
   curl -fsS --max-time 15 "$API/api/chain?limit=$lim" 2>/dev/null \
-    | Q="$q" MINE="$mine" MK="$mk" python3 -c '
+    | Q="$q" MINE="$mine" MK="$mk" $PY -c '
 import json,sys,os
 q=os.environ.get("Q","").lower().strip()
 mine=os.environ.get("MINE","0")=="1"
@@ -144,13 +233,16 @@ case "$cmd" in
     while IFS= read -r line; do
       [ -z "$line" ] && continue
       n=$((n+1)); [ "$n" -gt "$SYNC_CAP" ] && { printf '%s\n' "$line" >> "$RETRY_FILE"; continue; }
-      slug="$(printf '%s' "$line" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("slug",""))' 2>/dev/null)"
-      summary="$(printf '%s' "$line" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("summary",""))' 2>/dev/null)"
-      body="$(printf '%s' "$line" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("body",""))' 2>/dev/null)"
+      slug="$(printf '%s' "$line" | $PY -c 'import json,sys; print(json.load(sys.stdin).get("slug",""))' 2>/dev/null)"
+      summary="$(printf '%s' "$line" | $PY -c 'import json,sys; print(json.load(sys.stdin).get("summary",""))' 2>/dev/null)"
+      body="$(printf '%s' "$line" | $PY -c 'import json,sys; print(json.load(sys.stdin).get("body",""))' 2>/dev/null)"
       [ -z "$slug" ] && continue
       if out="$(post "skill.$slug" "SKILL" "⬢" "$summary" "$body")"; then
         ok=$((ok+1))
         printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$slug" "$(printf '%s' "$out" | grep -o '"height":[0-9]*' | head -1)" >> "$RECEIPT_FILE"
+        # mirror it while we still hold the body — this is what makes the new skill RETRIEVABLE.
+        # Only on success: a skill that never landed must never ground an answer.
+        printf '%s\n' "$line" >> "$MIRROR_FILE"
       else
         fail=$((fail+1)); printf '%s\n' "$line" >> "$RETRY_FILE"
       fi
@@ -173,6 +265,23 @@ EOF
     mk="$(marker)"
     echo "⬢ chain · skills already inscribed under $mk:"
     read_chain "" "$lim" 1 "$mk"
+    ;;
+  claim)
+    # Claim a free (genie-authored) commons skill YOU made on an unnamed node → authorship flips
+    # genie → <new_marker>. Proves ownership by presenting this node's private secret; the server
+    # checks sha256(secret) against the skill's stored commit. Usage: chain.sh claim <src_id> <your.agent>
+    sidfull="${2:?usage: chain.sh claim <src_id> <your-name.agent>}"
+    newmk="${3:?usage: chain.sh claim <src_id> <your-name.agent>}"
+    sec="$(node_secret)"   # never printed — passed straight to the server over TLS
+    payload="{\"src_id\":$(esc "$sidfull"),\"secret\":$(esc "$sec"),\"new_marker\":$(esc "$newmk")}"
+    if out="$(curl -fsS --max-time 12 -X POST "$API/api/chain/claim" -H 'Content-Type: application/json' -d "$payload" 2>/dev/null)"; then
+      h="$(printf '%s' "$out" | grep -o '"height":[0-9]*' | head -1)"
+      echo "✋ claimed '$sidfull' → now yours as $newmk. $h"
+      echo "   (author flips genie→$newmk on chain; future royalties resolve to you.)"
+    else
+      echo "✗ claim failed — check the src_id, or the skill may already be claimed / not in the commons." >&2
+      exit 0
+    fi
     ;;
   install)
     # PULL a skill's package OFF the chain and install it into ~/.claude/skills/<slug>/.
@@ -200,7 +309,7 @@ EOF
     trap 'rm -rf "$tmp"' EXIT
 
     curl -fsS --max-time 15 "$API/api/chain?limit=500" 2>/dev/null \
-      | SLUG="$slug" python3 -c '
+      | SLUG="$slug" $PY -c '
 import json,sys,os,re,hashlib,gzip,base64
 slug=os.environ["SLUG"].lower()
 body_f,report_f,flags_f,pkg_d=sys.argv[1],sys.argv[2],sys.argv[3],sys.argv[4]
@@ -384,7 +493,7 @@ open(report_f,"w").write("\n".join(R)+"\n")
     slug="${2:?usage: chain.sh pack <slug>}"
     root="$HOME/.claude/skills/$slug"
     [ -d "$root" ] || { echo "✗ no skill dir: $root"; exit 1; }
-    packed="$(SLUG="$slug" ROOT="$root" python3 - <<'PY'
+    packed="$(SLUG="$slug" ROOT="$root" $PY - <<'PY'
 import json, gzip, base64, hashlib, os, sys
 slug=os.environ["SLUG"]; root=os.environ["ROOT"]
 MAXF=200_000; SKIP={".git","__pycache__","node_modules",".DS_Store"}
@@ -422,9 +531,9 @@ summ=next((l.strip("# ").strip() for l in files["SKILL.md"].splitlines()
 print(json.dumps({"summary":summ,"body":body,"data":{"pack":pack}},ensure_ascii=False))
 PY
 )" || { echo "✗ pack failed for '$slug' (see reason above)."; exit 0; }
-    summary="$(printf '%s' "$packed" | python3 -c 'import json,sys;print(json.load(sys.stdin)["summary"])')"
-    body="$(printf '%s'    "$packed" | python3 -c 'import json,sys;print(json.load(sys.stdin)["body"])')"
-    data="$(printf '%s'    "$packed" | python3 -c 'import json,sys;print(json.dumps(json.load(sys.stdin)["data"]))')"
+    summary="$(printf '%s' "$packed" | $PY -c 'import json,sys;print(json.load(sys.stdin)["summary"])')"
+    body="$(printf '%s'    "$packed" | $PY -c 'import json,sys;print(json.load(sys.stdin)["body"])')"
+    data="$(printf '%s'    "$packed" | $PY -c 'import json,sys;print(json.dumps(json.load(sys.stdin)["data"]))')"
     mkdir -p "$(dirname "$RECEIPT_FILE")"
     if out="$(post "skill.$slug" "SKILL" "⬢" "$summary" "$body" "$data")"; then
       h="$(printf '%s' "$out" | grep -o '"height":[0-9]*' | head -1)"
@@ -472,7 +581,7 @@ PY
         # the HOST's Genie calls this between turns; prints pending third-party prompts for approval
         room="${3:-$(cat "$ROOM_FILE" 2>/dev/null)}"; [ -n "$room" ] || { echo "no open room (chain.sh collab open first)"; exit 0; }
         curl -fsS --max-time 12 "$API/api/collab/pull?room=$room&host_marker=$(marker)" 2>/dev/null \
-          | python3 -c 'import json,sys
+          | $PY -c 'import json,sys
 try: ps=json.load(sys.stdin).get("prompts",[])
 except Exception: print("(collab unreachable)"); sys.exit(0)
 if not ps: print("(no pending third-party prompts)"); sys.exit(0)
