@@ -109,13 +109,12 @@ post() { # post <src_id> <type> <symbol> <summary> <body> [data_json]
   local mk sid typ sym sum bod dat
   mk="$(marker)"; sid="$1"; typ="$2"; sym="$3"; sum="$4"; bod="${5:-}"; dat="${6:-}"
   # --- MARKER NORMALIZATION + PRIVACY GUARD (all users, non-negotiable) -----------------------
-  # The server requires a fully-qualified marker (name.agent/.genie/.wtf/.com/.eth/.bot). Qualify
-  # bare markers so writes are accepted. The unnamed/commons author is 'genie.genie' — the '.genie'
-  # suffix reads as GENIE and signals a FREE skill (vs '.agent' = a paid, owned agent). NEVER derive
-  # a marker from the OS account.
+  # The free COMMONS author is the bare literal 'genie' — reads as GENIE, signals a FREE skill (vs a
+  # chosen 'name.agent' = a paid, owned agent). THERE IS NO '.genie' TLD. Chosen handles get a real
+  # TLD (.agent/.wtf/.com/.eth/.bot); the OS account is NEVER used.
   case "$mk" in
-    ""|"genie"|"Genie") mk="genie.genie" ;;
-    *.agent|*.genie|*.wtf|*.com|*.eth|*.bot) : ;;   # already qualified — leave a CHOSEN handle alone
+    ""|"genie"|"Genie") mk="genie" ;;                # free commons author (bare literal)
+    *.agent|*.wtf|*.com|*.eth|*.bot) : ;;            # already a qualified CHOSEN handle — leave it
     *) mk="${mk}.agent" ;;                            # qualify a bare CHOSEN handle
   esac
   # HARD BLOCK (fail closed): the public chain must NEVER carry the machine's login name as an
@@ -128,10 +127,10 @@ post() { # post <src_id> <type> <symbol> <summary> <body> [data_json]
     return 1
   fi
   # -------------------------------------------------------------------------------------------
-  # Commons-claim: if authoring under the shared 'genie.genie' marker (unnamed node) and the caller
+  # Commons-claim: if authoring under the shared 'genie' marker (unnamed node) and the caller
   # didn't supply a data blob, attach a claim token so this free skill stays CLAIMABLE by its
   # real author. The commit is a hash of the private node secret — never the secret itself.
-  if [ "$mk" = "genie.genie" ] && [ -z "$dat" ]; then
+  if [ "$mk" = "genie" ] && [ -z "$dat" ]; then
     dat="{\"claim\":{\"v\":1,\"commit\":$(esc "$(node_commit)"),\"hint\":\"node\"}}"
   fi
   local payload

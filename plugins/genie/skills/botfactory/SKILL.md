@@ -1,11 +1,11 @@
 ---
 name: botfactory
-description: [5 free/day, then BYOK:anthropic] Spins up a new task-specific bot. Uses Claude. TRIGGER when the user asks: spin up a bot, make me an agent, build a custom worker.
+description: [5 free/day, then BYOK:anthropic] Turns a BotFather token into a LIVE hosted bot — chain memory, a brain, an owner link. You install nothing. TRIGGER when the user asks: spin up a bot, make me an agent, build a custom worker, i want my own bot.
 ---
 
 # botfactory
 
-Spins up a new task-specific bot. Uses Claude.
+Turns a BotFather token into a LIVE hosted bot — chain memory, a brain, an owner link. You install nothing.
 
 **Cost lane:** `metered` · provider `anthropic`
 
@@ -15,8 +15,8 @@ This skill **costs us credits**, so it's metered: **5 free/day**, then BYOK `ant
 ```
 V=$(bash "$CLAUDE_PLUGIN_ROOT/tools/meter.sh" gate botfactory anthropic)
 case "$V" in
-  ALLOW*) python3 ~/Genie/bots/botfactory/factory.py <args> ;;                       # under the daily free cap → run
-  KEYED*) python3 ~/Genie/bots/botfactory/factory.py <args> ;;                       # user's own key → unlimited, run
+  ALLOW*) bash "$CLAUDE_PLUGIN_ROOT/tools/bot.sh" new <args> ;;                       # under the daily free cap → run
+  KEYED*) bash "$CLAUDE_PLUGIN_ROOT/tools/bot.sh" new <args> ;;                       # user's own key → unlimited, run
   BYOK*)  echo "Used today's 5 free botfactory runs. Add your anthropic key to keep going (yours alone — we never see it): meter.sh setkey anthropic" ;;
 esac
 ```

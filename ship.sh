@@ -47,7 +47,7 @@ echo "✓ shipped v$new -> autoUpdate clients pull it next session"
 # ── VISIBILITY GUARD ─────────────────────────────────────────────
 # genie-plugin MUST stay PUBLIC (AUTO, 2026-07-07). The self-update
 # (raw.githubusercontent) + `/plugin marketplace add` install path only
-# work on a PUBLIC repo. The credit drain that once motivated privacy was
+# work on a PUBLIC repo. The credit outflow that once motivated privacy was
 # the Helius Atlas WebSocket, NOT repo scrapers — so there's no cost reason
 # to hide it. This snaps it back public if a window ever re-privatizes it.
 # The SAUCE stays out of this repo (server/wildflower-genesis/PMBot_v1 are

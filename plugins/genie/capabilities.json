@@ -85,9 +85,9 @@
       "name": "botfactory",
       "cost": "metered",
       "provider": "anthropic",
-      "cmd": "python3 ~/Genie/bots/botfactory/factory.py",
-      "triggers": "spin up a bot, make me an agent, build a custom worker",
-      "summary": "Spins up a new task-specific bot. Uses Claude.",
+      "cmd": "bash \"$CLAUDE_PLUGIN_ROOT/tools/bot.sh\" new",
+      "triggers": "spin up a bot, make me an agent, build a custom worker, i want my own bot",
+      "summary": "Turns a BotFather token into a LIVE hosted bot \u2014 chain memory, a brain, an owner link. You install nothing.",
       "creator_marker": "orangegenie",
       "price_per_call": 0.0
     },

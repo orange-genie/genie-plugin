@@ -49,6 +49,14 @@ for f in canon.md invariants.md behavior.md; do
   else rm -f "$tmp" 2>/dev/null || true; fi
 done
 
+# ── 1b. Presence ping — tell the server this install is alive (idle or busy) so every machine
+# shows up in /api/devices/status, not just when it runs a metered skill. Free, no-count, HTTPS,
+# bounded, fail-silent. NEVER background this (hook rule — the 7/4 incident); a 3s foreground curl is fine.
+presence_marker="$(id -un 2>/dev/null || echo node).agent"
+[ -f "$HOME/.claude/genie_marker" ] && presence_marker="$(tr -d '[:space:]' < "$HOME/.claude/genie_marker" 2>/dev/null || echo "$presence_marker")"
+curl -fsS --max-time 3 -X POST "https://orangegenie-api-production.up.railway.app/api/presence" \
+  -H 'Content-Type: application/json' -d "{\"marker\":\"${presence_marker}\"}" >/dev/null 2>&1 || true
+
 # ── 2. Structural-update nudge over HTTPS (only for changes that need /plugin update) ──
 ver() { grep -o '"version"[^,]*' "$1" 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+'; }
 local_v=""; [ -n "$ROOT" ] && local_v=$(ver "$ROOT/.claude-plugin/plugin.json")

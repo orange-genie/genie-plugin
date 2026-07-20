@@ -32,6 +32,17 @@ mkdir -p "$DIR"
 [ -f "$OWED" ]  || echo '{}' > "$OWED"
 
 marker() { local f="$HOME/.claude/genie_marker"; [ -f "$f" ] && tr -d '[:space:]' <"$f" || printf '%s.agent' "$(id -un 2>/dev/null||echo node)"; }
+# install_id — a STABLE per-install id (created once, never leaves this box). The free-tier
+# bucket is keyed on this on the server, so renaming your marker can't reset your 5/day.
+install_id() {
+  local f="$HOME/.claude/genie/install.key"
+  if [ ! -f "$f" ]; then
+    mkdir -p "$(dirname "$f")" 2>/dev/null
+    { uuidgen 2>/dev/null || python3 -c 'import uuid;print(uuid.uuid4())' 2>/dev/null || date +%s%N; } \
+      | tr -d '[:space:]' > "$f" 2>/dev/null
+  fi
+  tr -d '[:space:]' <"$f" 2>/dev/null
+}
 today()  { date +%F; }
 
 cap_for() { # free_per_day for a feature (manifest override, else default)
@@ -124,7 +135,7 @@ gate() {
   # handling only when the server is unreachable.
   local sv line
   sv="$(curl -fsS --max-time 5 -X POST "$API/api/meter/gate" -H 'Content-Type: application/json' \
-        -d "{\"marker\":\"$(marker)\",\"feature\":\"$feat\",\"provider\":\"$prov\"}" 2>/dev/null || true)"
+        -d "{\"marker\":\"$(marker)\",\"install_id\":\"$(install_id)\",\"feature\":\"$feat\",\"provider\":\"$prov\"}" 2>/dev/null || true)"
   if [ -n "$sv" ]; then
     line="$(printf '%s' "$sv" | python3 -c 'import json,sys
 try: print(json.load(sys.stdin).get("line","").strip())
