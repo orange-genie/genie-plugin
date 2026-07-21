@@ -12,7 +12,7 @@ MARKER_FILE="$HOME/.claude/genie_marker"
 new="${1:?usage: rename.sh <new_username>}"
 
 # current marker
-if [ -f "$MARKER_FILE" ]; then old="$(tr -d '[:space:]' < "$MARKER_FILE")"; else old="$(id -un 2>/dev/null || echo node).agent"; fi
+if [ -f "$MARKER_FILE" ]; then old="$(tr -d '[:space:]' < "$MARKER_FILE")"; else old="genie"; fi
 new="$(printf '%s' "$new" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
 
 esc() { printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' 2>/dev/null \

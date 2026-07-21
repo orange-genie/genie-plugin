@@ -52,7 +52,7 @@ done
 # ── 1b. Presence ping — tell the server this install is alive (idle or busy) so every machine
 # shows up in /api/devices/status, not just when it runs a metered skill. Free, no-count, HTTPS,
 # bounded, fail-silent. NEVER background this (hook rule — the 7/4 incident); a 3s foreground curl is fine.
-presence_marker="$(id -un 2>/dev/null || echo node).agent"
+presence_marker="genie"
 [ -f "$HOME/.claude/genie_marker" ] && presence_marker="$(tr -d '[:space:]' < "$HOME/.claude/genie_marker" 2>/dev/null || echo "$presence_marker")"
 curl -fsS --max-time 3 -X POST "https://orangegenie-api-production.up.railway.app/api/presence" \
   -H 'Content-Type: application/json' -d "{\"marker\":\"${presence_marker}\"}" >/dev/null 2>&1 || true

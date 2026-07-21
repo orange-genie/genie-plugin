@@ -21,7 +21,7 @@ API="${GENIE_API:-https://orangegenie-api-production.up.railway.app}"
 
 marker() {
   if [ -f "$HOME/.claude/genie_marker" ]; then cat "$HOME/.claude/genie_marker"
-  else echo "$(id -un | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-').agent"; fi
+  else echo 'genie'; fi
 }
 
 jqget() { python3 -c 'import json,sys

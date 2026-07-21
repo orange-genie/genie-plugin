@@ -9,7 +9,7 @@
 # Override API base with GENIE_API. Marker resolves from ~/.claude/genie_marker (for metering).
 set -euo pipefail
 API="${GENIE_API:-https://orangegenie-api-production.up.railway.app}"
-marker() { local f="$HOME/.claude/genie_marker"; [ -f "$f" ] && tr -d '[:space:]' <"$f" || printf '%s.agent' "$(id -un 2>/dev/null||echo node)"; }
+marker() { local f="$HOME/.claude/genie_marker"; [ -f "$f" ] && tr -d '[:space:]' <"$f" || printf 'genie'; }
 MK="$(marker)"
 
 pretty() { python3 -c 'import json,sys

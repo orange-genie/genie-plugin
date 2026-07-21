@@ -25,7 +25,7 @@ marker=""
 if [ -f "$MARKER_FILE" ]; then
   marker="$(tr -d '[:space:]' < "$MARKER_FILE" 2>/dev/null || true)"
 fi
-[ -n "$marker" ] || marker="$(id -un 2>/dev/null || echo node)"
+[ -n "$marker" ] || marker="genie"
 
 # ── 2. Live shared-chain facts (real or nothing — fail-silent) ──
 height="$(curl -fsS --max-time 4 "$API/api/chain" 2>/dev/null \

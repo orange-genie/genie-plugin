@@ -31,7 +31,7 @@ mkdir -p "$DIR"
 [ -f "$KEYS" ]  || echo '{}' > "$KEYS"
 [ -f "$OWED" ]  || echo '{}' > "$OWED"
 
-marker() { local f="$HOME/.claude/genie_marker"; [ -f "$f" ] && tr -d '[:space:]' <"$f" || printf '%s.agent' "$(id -un 2>/dev/null||echo node)"; }
+marker() { local f="$HOME/.claude/genie_marker"; [ -f "$f" ] && tr -d '[:space:]' <"$f" || printf 'genie'; }
 # install_id — a STABLE per-install id (created once, never leaves this box). The free-tier
 # bucket is keyed on this on the server, so renaming your marker can't reset your 5/day.
 install_id() {
