@@ -338,7 +338,15 @@ EOF
     body_f="$tmp/body"; report_f="$tmp/report"; flags_f="$tmp/flags"; pkg_d="$tmp/pkg"
     trap 'rm -rf "$tmp"' EXIT
 
-    curl -fsS --max-time 15 "$API/api/chain?limit=500" 2>/dev/null \
+    rc=0          # MUST be initialised: with `|| rc=$?` below, a SUCCESSFUL run never assigns rc,
+    #               and `set -u` would then abort on `case "$rc"` — turning success into a crash.
+    # ?full=1 IS REQUIRED. GET /api/chain omits the body columns by DEFAULT — deliberately, for
+    # Supabase egress (the explorer/provenance poll at limit=1000, and full bodies at that rate
+    # blew the quota). The body is stored and returned, just opt-in. Reading without full=1 and
+    # concluding "the API strips bodies" is what sent a whole night down a workaround; there is
+    # no need to smuggle content through data.body. Verify: ?limit=100 -> 0 bodies, add
+    # &full=1 -> 92 of 100.
+    curl -fsS --max-time 15 "$API/api/chain?limit=500&full=1" 2>/dev/null \
       | SLUG="$slug" $PY -c '
 import json,sys,os,re,hashlib,gzip,base64
 slug=os.environ["SLUG"].lower()
@@ -346,9 +354,15 @@ body_f,report_f,flags_f,pkg_d=sys.argv[1],sys.argv[2],sys.argv[3],sys.argv[4]
 try: blocks=json.load(sys.stdin).get("blocks",[])
 except Exception: sys.exit(2)
 
+# SLUG SHAPES DIFFER BETWEEN THE STOREFRONT AND THE CHAIN, so compare on a normalized form.
+# /api/skills hands the user  node-chazz-agent-unreal-blueprint-import   (dashes)
+# the chain stores            node.chazz.agent.unreal-blueprint-import   (dots)
+# The old matcher compared raw src_id against "skill.<slug>", so a slug copied straight from the
+# storefront could never match ANY block — install missed every time, for every user, silently.
+def _norm(s): return re.sub(r"[^a-z0-9]+","-",str(s).lower()).strip("-")
 def matches(b):
-    sid=str(b.get("src_id","")).lower(); summ=str(b.get("summary","")).lower()
-    return sid.endswith("skill."+slug) or ("skill."+slug) in sid or slug in summ
+    sid=_norm(b.get("src_id","")); s=_norm(slug)
+    return sid==s or sid.endswith("-"+s) or ("skill-"+s) in sid or s in _norm(b.get("summary",""))
 hits=[b for b in blocks if (b.get("type","")=="SKILL" and matches(b))]
 if not hits: sys.exit(3)                                  # not found in recent window
 b=sorted(hits, key=lambda x:x.get("height",0))[-1]        # newest match wins
@@ -370,7 +384,15 @@ if ids:
 
 # ── (3) INTEGRITY: recompute the server seal exactly ──
 prev=str(b.get("prev_hash","")); h=str(b.get("height","")); ts=str(b.get("ts","")); summ=str(b.get("summary",""))
-calc=hashlib.sha256(("%s|%s|%s|%s|%s"%(prev,h,ts,summ,body)).encode("utf-8")).hexdigest()
+# TIMESTAMP MUST BE NORMALISED BEFORE HASHING. The server seals with
+# new Date().toISOString() -> "...823Z", but Postgres/Supabase hands the same instant back as
+# "...823+00:00". Same moment, different bytes, so a byte-for-byte rehash of what the API
+# returns can NEVER reproduce the seal. Measured on the live chain: 0 of 313 blocks verified
+# as-returned; 282 verify once the offset form is folded back to Z. Without this the review
+# stamps "TAMPERED" on every honest skill on the chain and teaches users to click through the
+# one warning that is supposed to mean something.
+ts_h=re.sub(r"\+00:00$","Z",str(ts))
+calc=hashlib.sha256(("%s|%s|%s|%s|%s"%(prev,h,ts_h,summ,body)).encode("utf-8")).hexdigest()
 stored=str(b.get("hash",""))
 integrity="ok" if (stored and calc==stored) else "bad"
 
@@ -453,8 +475,13 @@ prev_lines=lines if len(lines)<=200 else lines[:200]+["  … (%d more lines — 
 for ln in prev_lines: R.append("  | "+ln)
 R.append("  ──────────────────────────────────────────────────────────────────────────────────────────")
 open(report_f,"w").write("\n".join(R)+"\n")
-' "$body_f" "$report_f" "$flags_f" "$pkg_d"
-    rc=$?
+' "$body_f" "$report_f" "$flags_f" "$pkg_d" || rc=$?
+    # `|| rc=$?` IS LOAD-BEARING — do not simplify it back to a bare `rc=$?` on the next line.
+    # This script runs under `set -euo pipefail` (top of file). A bare `rc=$?` never executes when
+    # the helper exits non-zero: errexit kills the script at the pipeline, the EXIT trap wipes the
+    # sandbox, and the three branches below become UNREACHABLE CODE. The user then sees no output
+    # and exit 0 — a failure that looks exactly like success. That is how a broken install went
+    # unnoticed. Making it a compound command suppresses errexit so the handler actually runs.
     case "$rc" in
       2) echo "✗ chain unreachable."; exit 0;;
       3) echo "✗ no skill '$slug' found on the chain (recent window)."; exit 0;;
