@@ -12,6 +12,8 @@
 #   chain.sh sync                         # inscribe everything staged in the queue (called by the Stop hook)
 #   chain.sh search <query> [limit]        # READ the chain: skills the commons already has
 #   chain.sh mine [limit]                  # READ the chain: skills already inscribed under YOUR marker
+#   chain.sh verify [limit]                # VERIFY the chain: hash links + a pinned anchor (tamper check)
+#   chain.sh claim <src_id> <name.agent>   # claim a commons skill this node authored
 #   chain.sh whoami                        # print this node's marker
 #
 # The write loop (why skills actually land): during a session the Genie STAGES each reusable skill
@@ -211,7 +213,7 @@ case "$cmd" in
     mkdir -p "$(dirname "$RECEIPT_FILE")"
     if out="$(post "skill.$slug" "SKILL" "⬢" "$summary" "$body")"; then
       h="$(printf '%s' "$out" | grep -o '"height":[0-9]*' | head -1)"
-      echo "⬢ inscribed skill '$slug' as $(marker). $h"
+      echo "⬢ inscribed skill '$slug' as $(qualify_marker "$(marker)"). $h"
       printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$slug" "$h" >> "$RECEIPT_FILE"
     else
       # LOUD failure (was silently `exit 0`): stage for retry so the work is never lost.
@@ -260,7 +262,7 @@ case "$cmd" in
 $src_lines
 EOF
     : > "$QUEUE_FILE"                 # queue fully consumed; failures live in RETRY_FILE for next sync
-    [ "$ok" -gt 0 ] && echo "⬢ inscribed $ok skill(s) under $(marker)."
+    [ "$ok" -gt 0 ] && echo "⬢ inscribed $ok skill(s) under $(qualify_marker "$(marker)")."
     [ "$fail" -gt 0 ] && echo "✗ $fail skill(s) failed to land — kept for retry next session." >&2
     exit 0
     ;;
@@ -283,15 +285,24 @@ EOF
     # genie → <new_marker>. Proves ownership by presenting this node's private secret; the server
     # checks sha256(secret) against the skill's stored commit. Usage: chain.sh claim <src_id> <your.agent>
     sidfull="${2:?usage: chain.sh claim <src_id> <your-name.agent>}"
-    newmk="${3:?usage: chain.sh claim <src_id> <your-name.agent>}"
+    # Qualify the TARGET marker the same way a write does. A user who types a bare name
+    # ("chain.sh claim <id> genie-2") used to have it sent unqualified, where the server's
+    # MARKER_RE rejects it — and the error below then blamed the src_id. Same drift class as
+    # the `mine` bug: identity normalized on one path and not another.
+    newmk="$(qualify_marker "${3:?usage: chain.sh claim <src_id> <your-name.agent>}")"
     sec="$(node_secret)"   # never printed — passed straight to the server over TLS
     payload="{\"src_id\":$(esc "$sidfull"),\"secret\":$(esc "$sec"),\"new_marker\":$(esc "$newmk")}"
+    # capture stderr-free body AND distinguish a real failure from a transport failure; the old
+    # version discarded the server's response and printed one guess for every possible cause.
     if out="$(curl -fsS --max-time 12 -X POST "$API/api/chain/claim" -H 'Content-Type: application/json' -d "$payload" 2>/dev/null)"; then
       h="$(printf '%s' "$out" | grep -o '"height":[0-9]*' | head -1)"
       echo "✋ claimed '$sidfull' → now yours as $newmk. $h"
       echo "   (author flips genie→$newmk on chain; future royalties resolve to you.)"
     else
-      echo "✗ claim failed — check the src_id, or the skill may already be claimed / not in the commons." >&2
+      # re-run without -f so the server's actual reason is visible instead of a guess
+      err="$(curl -sS --max-time 12 -X POST "$API/api/chain/claim" -H 'Content-Type: application/json' -d "$payload" 2>&1 | head -c 300)"
+      echo "✗ claim failed as $newmk." >&2
+      [ -n "$err" ] && echo "   server said: $err" >&2
       exit 0
     fi
     ;;
@@ -549,7 +560,7 @@ PY
     mkdir -p "$(dirname "$RECEIPT_FILE")"
     if out="$(post "skill.$slug" "SKILL" "⬢" "$summary" "$body" "$data")"; then
       h="$(printf '%s' "$out" | grep -o '"height":[0-9]*' | head -1)"
-      echo "⬢ packed + inscribed multi-file skill '$slug' as $(marker). $h"
+      echo "⬢ packed + inscribed multi-file skill '$slug' as $(qualify_marker "$(marker)"). $h"
       printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$slug" "$h" >> "$RECEIPT_FILE"
     else
       echo "✗ '$slug' did NOT land (chain write failed)." >&2; exit 0
@@ -563,7 +574,7 @@ PY
     case "$stars" in 1|2|3|4|5) : ;; *) echo "✗ stars must be 1-5"; exit 1;; esac
     data="{\"slug\":$(esc "$slug"),\"stars\":$stars}"
     if out="$(post "rate.$slug" "RATING" "★" "RATING · $slug · ${stars}★" "" "$data")"; then
-      echo "★ rated '$slug' ${stars}/5 as $(marker). $(printf '%s' "$out" | grep -o '"height":[0-9]*' | head -1)"
+      echo "★ rated '$slug' ${stars}/5 as $(qualify_marker "$(marker)"). $(printf '%s' "$out" | grep -o '"height":[0-9]*' | head -1)"
     else
       echo "✗ rating didn't land (chain write failed)." >&2; exit 0
     fi
@@ -580,7 +591,7 @@ PY
         out="$(curl -fsS --max-time 12 -X POST "$API/api/collab/room" -H 'Content-Type: application/json' \
                -d "{\"host_marker\":$(esc "$(marker)")}" 2>/dev/null)" || { echo "⚠️  chain unreachable"; exit 0; }
         room="$(printf '%s' "$out" | grep -o '"room":"[a-f0-9]*"' | head -1 | cut -d'"' -f4)"
-        [ -n "$room" ] && { printf '%s' "$room" > "$ROOM_FILE"; echo "⬢ collab room OPEN as $(marker). Share this code (revoke anytime): $room"; echo "   Incoming prompts credit YOU; you approve each one. Turn it off with: chain.sh collab off"; } \
+        [ -n "$room" ] && { printf '%s' "$room" > "$ROOM_FILE"; echo "⬢ collab room OPEN as $(qualify_marker "$(marker)"). Share this code (revoke anytime): $room"; echo "   Incoming prompts credit YOU; you approve each one. Turn it off with: chain.sh collab off"; } \
                        || echo "✗ could not open room: $out"
         ;;
       send)
@@ -667,5 +678,5 @@ else:
     echo "$(marker)"
     ;;
   *)
-    echo "usage: chain.sh {login | skill <slug> <summary> [body] | queue <slug> <summary> [body] | sync | search <query> [limit] | mine [limit] | install <slug> | pack <slug> | rate <slug> <1-5> | collab {open|send|pull|off} | whoami}"; exit 1;;
+    echo "usage: chain.sh {login | skill <slug> <summary> [body] | queue <slug> <summary> [body] | sync | search <query> [limit] | mine [limit] | verify [limit] | claim <src_id> <your-name.agent> | install <slug> | pack <slug> | rate <slug> <1-5> | collab {open|send|pull|off} | whoami}"; exit 1;;
 esac
