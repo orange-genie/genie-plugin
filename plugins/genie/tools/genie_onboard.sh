@@ -40,6 +40,17 @@ fi
 mkdir -p "$STATE_DIR"
 
 # ── 1. identity ──────────────────────────────────────────────────────────────────────────
+# QUALIFY ONCE, AT CLAIM TIME. The marker file used to hold whatever the user typed ("genie-2"),
+# while the chain only accepts and stores a qualified handle ("genie-2.agent") — so every caller
+# downstream had to remember to convert, and the ones that forgot compared a raw marker against a
+# qualified src and silently found nothing (`mine` reported "nothing under your marker yet" to
+# users with real work on chain; `claim` sent a bare name the server's MARKER_RE rejected).
+# The name is normalized here, at the single moment it is claimed, so nothing downstream converts.
+case "$u" in
+  ""|"genie"|"Genie") u="genie" ;;                    # free commons author (bare literal)
+  *.agent|*.wtf|*.com|*.eth|*.bot) : ;;               # already a qualified CHOSEN handle
+  *) u="${u}.agent" ;;                                # qualify a bare CHOSEN handle
+esac
 printf '%s' "$u" > "$MARKER_FILE"
 echo "⬢ identity claimed: $u  ($MARKER_FILE)"
 
