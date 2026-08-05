@@ -56,15 +56,22 @@ SYNC_CAP="${GENIE_SYNC_CAP:-5}"                        # max skills inscribed pe
 marker() {
   local m
   if [ -n "${GENIE_MARKER:-}" ]; then
-    printf '%s' "$(printf '%s' "$GENIE_MARKER" | tr -d '[:space:]')"; return
+    qualify_marker "$(printf '%s' "$GENIE_MARKER" | tr -d '[:space:]')"; return
   fi
   if [ -f ".genie_marker" ]; then
     m="$(tr -d '[:space:]' < ".genie_marker" 2>/dev/null || true)"
-    [ -n "$m" ] && { printf '%s' "$m"; return; }
+    [ -n "$m" ] && { qualify_marker "$m"; return; }
   fi
   if [ -f "$MARKER_FILE" ]; then
     m="$(tr -d '[:space:]' < "$MARKER_FILE" 2>/dev/null || true)"
-    [ -n "$m" ] && { printf '%s' "$m"; return; }
+    if [ -n "$m" ]; then
+      local q; q="$(qualify_marker "$m")"
+      # SELF-HEALING MIGRATION: nodes onboarded before qualification moved to claim time hold a
+      # BARE name here. Rewrite it once so the file matches what the chain actually stores —
+      # otherwise every read that filters on identity keeps missing its own work.
+      [ "$q" != "$m" ] && printf '%s' "$q" > "$MARKER_FILE" 2>/dev/null
+      printf '%s' "$q"; return
+    fi
   fi
   # UNNAMED node → author as the shared 'genie' commons (FREE for everyone), NOT the OS login
   # name. Publishing `$(id -un).agent` once leaked the machine's account name to the public chain
@@ -128,7 +135,7 @@ qualify_marker() {
 
 post() { # post <src_id> <type> <symbol> <summary> <body> [data_json]
   local mk sid typ sym sum bod dat
-  mk="$(qualify_marker "$(marker)")"; sid="$1"; typ="$2"; sym="$3"; sum="$4"; bod="${5:-}"; dat="${6:-}"
+  mk="$(marker)"; sid="$1"; typ="$2"; sym="$3"; sum="$4"; bod="${5:-}"; dat="${6:-}"
   # --- PRIVACY GUARD (fail closed) -----------------------------------------------------------
   # HARD BLOCK (fail closed): the public chain must NEVER carry the machine's login name as an
   # identity. If the marker's local-part equals the OS account, refuse to inscribe — do not leak.
@@ -213,7 +220,7 @@ case "$cmd" in
     mkdir -p "$(dirname "$RECEIPT_FILE")"
     if out="$(post "skill.$slug" "SKILL" "⬢" "$summary" "$body")"; then
       h="$(printf '%s' "$out" | grep -o '"height":[0-9]*' | head -1)"
-      echo "⬢ inscribed skill '$slug' as $(qualify_marker "$(marker)"). $h"
+      echo "⬢ inscribed skill '$slug' as $(marker). $h"
       printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$slug" "$h" >> "$RECEIPT_FILE"
     else
       # LOUD failure (was silently `exit 0`): stage for retry so the work is never lost.
@@ -262,7 +269,7 @@ case "$cmd" in
 $src_lines
 EOF
     : > "$QUEUE_FILE"                 # queue fully consumed; failures live in RETRY_FILE for next sync
-    [ "$ok" -gt 0 ] && echo "⬢ inscribed $ok skill(s) under $(qualify_marker "$(marker)")."
+    [ "$ok" -gt 0 ] && echo "⬢ inscribed $ok skill(s) under $(marker)."
     [ "$fail" -gt 0 ] && echo "✗ $fail skill(s) failed to land — kept for retry next session." >&2
     exit 0
     ;;
@@ -276,7 +283,7 @@ EOF
     lim="${2:-200}"
     # qualify EXACTLY as post() does — the chain stores the qualified marker, so a raw
     # compare here silently returns nothing for every user with a bare marker.
-    mk="$(qualify_marker "$(marker)")"
+    mk="$(marker)"
     echo "⬢ chain · skills already inscribed under $mk:"
     read_chain "" "$lim" 1 "$mk"
     ;;
@@ -560,7 +567,7 @@ PY
     mkdir -p "$(dirname "$RECEIPT_FILE")"
     if out="$(post "skill.$slug" "SKILL" "⬢" "$summary" "$body" "$data")"; then
       h="$(printf '%s' "$out" | grep -o '"height":[0-9]*' | head -1)"
-      echo "⬢ packed + inscribed multi-file skill '$slug' as $(qualify_marker "$(marker)"). $h"
+      echo "⬢ packed + inscribed multi-file skill '$slug' as $(marker). $h"
       printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$slug" "$h" >> "$RECEIPT_FILE"
     else
       echo "✗ '$slug' did NOT land (chain write failed)." >&2; exit 0
@@ -574,7 +581,7 @@ PY
     case "$stars" in 1|2|3|4|5) : ;; *) echo "✗ stars must be 1-5"; exit 1;; esac
     data="{\"slug\":$(esc "$slug"),\"stars\":$stars}"
     if out="$(post "rate.$slug" "RATING" "★" "RATING · $slug · ${stars}★" "" "$data")"; then
-      echo "★ rated '$slug' ${stars}/5 as $(qualify_marker "$(marker)"). $(printf '%s' "$out" | grep -o '"height":[0-9]*' | head -1)"
+      echo "★ rated '$slug' ${stars}/5 as $(marker). $(printf '%s' "$out" | grep -o '"height":[0-9]*' | head -1)"
     else
       echo "✗ rating didn't land (chain write failed)." >&2; exit 0
     fi
@@ -591,7 +598,7 @@ PY
         out="$(curl -fsS --max-time 12 -X POST "$API/api/collab/room" -H 'Content-Type: application/json' \
                -d "{\"host_marker\":$(esc "$(marker)")}" 2>/dev/null)" || { echo "⚠️  chain unreachable"; exit 0; }
         room="$(printf '%s' "$out" | grep -o '"room":"[a-f0-9]*"' | head -1 | cut -d'"' -f4)"
-        [ -n "$room" ] && { printf '%s' "$room" > "$ROOM_FILE"; echo "⬢ collab room OPEN as $(qualify_marker "$(marker)"). Share this code (revoke anytime): $room"; echo "   Incoming prompts credit YOU; you approve each one. Turn it off with: chain.sh collab off"; } \
+        [ -n "$room" ] && { printf '%s' "$room" > "$ROOM_FILE"; echo "⬢ collab room OPEN as $(marker). Share this code (revoke anytime): $room"; echo "   Incoming prompts credit YOU; you approve each one. Turn it off with: chain.sh collab off"; } \
                        || echo "✗ could not open room: $out"
         ;;
       send)
