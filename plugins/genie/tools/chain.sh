@@ -105,18 +105,29 @@ node_commit() { printf '%s' "$(node_secret)" | sha256_hex; }
 esc() { printf '%s' "$1" | $PY -c 'import json,sys; print(json.dumps(sys.stdin.read()))' 2>/dev/null \
         || printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"; }
 
+# --- MARKER NORMALIZATION (all users, non-negotiable) ----------------------------------------
+# The free COMMONS author is the bare literal 'genie' — reads as GENIE, signals a FREE skill (vs a
+# chosen 'name.agent' = a paid, owned agent). THERE IS NO '.genie' TLD. Chosen handles get a real
+# TLD (.agent/.wtf/.com/.eth/.bot); the OS account is NEVER used.
+#
+# THIS MUST BE SHARED. It used to live inline in post() only, so WRITES qualified 'genie-2' ->
+# 'genie-2.agent' while `mine` compared the RAW marker against the chain's src — the strings never
+# matched and `mine` reported "nothing under your marker yet" to every user with a bare marker who
+# had real work on chain. A read and a write that derive identity differently will always drift;
+# derive it in ONE place.
+qualify_marker() {
+  local mk="$1"
+  case "$mk" in
+    ""|"genie"|"Genie") printf 'genie' ;;                  # free commons author (bare literal)
+    *.agent|*.wtf|*.com|*.eth|*.bot) printf '%s' "$mk" ;;  # already a qualified CHOSEN handle
+    *) printf '%s.agent' "$mk" ;;                          # qualify a bare CHOSEN handle
+  esac
+}
+
 post() { # post <src_id> <type> <symbol> <summary> <body> [data_json]
   local mk sid typ sym sum bod dat
-  mk="$(marker)"; sid="$1"; typ="$2"; sym="$3"; sum="$4"; bod="${5:-}"; dat="${6:-}"
-  # --- MARKER NORMALIZATION + PRIVACY GUARD (all users, non-negotiable) -----------------------
-  # The free COMMONS author is the bare literal 'genie' — reads as GENIE, signals a FREE skill (vs a
-  # chosen 'name.agent' = a paid, owned agent). THERE IS NO '.genie' TLD. Chosen handles get a real
-  # TLD (.agent/.wtf/.com/.eth/.bot); the OS account is NEVER used.
-  case "$mk" in
-    ""|"genie"|"Genie") mk="genie" ;;                # free commons author (bare literal)
-    *.agent|*.wtf|*.com|*.eth|*.bot) : ;;            # already a qualified CHOSEN handle — leave it
-    *) mk="${mk}.agent" ;;                            # qualify a bare CHOSEN handle
-  esac
+  mk="$(qualify_marker "$(marker)")"; sid="$1"; typ="$2"; sym="$3"; sum="$4"; bod="${5:-}"; dat="${6:-}"
+  # --- PRIVACY GUARD (fail closed) -----------------------------------------------------------
   # HARD BLOCK (fail closed): the public chain must NEVER carry the machine's login name as an
   # identity. If the marker's local-part equals the OS account, refuse to inscribe — do not leak.
   local _oslogin _localpart; _oslogin="$(id -un 2>/dev/null)"; _localpart="${mk%%.*}"
@@ -261,7 +272,9 @@ EOF
     ;;
   mine)
     lim="${2:-200}"
-    mk="$(marker)"
+    # qualify EXACTLY as post() does — the chain stores the qualified marker, so a raw
+    # compare here silently returns nothing for every user with a bare marker.
+    mk="$(qualify_marker "$(marker)")"
     echo "⬢ chain · skills already inscribed under $mk:"
     read_chain "" "$lim" 1 "$mk"
     ;;
@@ -593,6 +606,62 @@ for p in ps: print("⚑ THIRD-PARTY PROMPT from "+str(p.get("from"))+" — APPRO
         ;;
       *) echo "usage: chain.sh collab {open | send <room> \"<prompt>\" | pull | off}";;
     esac
+    ;;
+  verify)
+    # Node-side tamper check. A node that only READS is trusting the operator; this makes the node
+    # CHECK. Two independent things, and the second is the one that matters:
+    #   1. LINKS  — every block's prev_hash equals the previous block's hash (internal consistency).
+    #   2. ANCHOR — a hash we pinned on a previous run still holds at that same height. Link-checking
+    #      alone proves nothing against a rewrite: a server that re-authored history would re-link it
+    #      cleanly. Only a hash pinned BEFORE the rewrite can catch one. The anchor is the actual
+    #      security property; the link scan is a consistency check.
+    lim="${2:-300}"
+    ANCHOR_FILE="$HOME/.claude/genie/chain_anchor"
+    curl -fsS --max-time 25 "$API/api/chain?limit=$lim" 2>/dev/null \
+      | ANCHOR="$(cat "$ANCHOR_FILE" 2>/dev/null || true)" $PY -c '
+import json,sys,os
+try: bl=json.load(sys.stdin).get("blocks",[])
+except Exception: print("⚠️  chain unreachable — cannot verify"); sys.exit(0)
+if not bl: print("⚠️  no blocks returned — cannot verify"); sys.exit(0)
+bl=sorted(bl,key=lambda b:b.get("height",0))
+lo,hi=bl[0].get("height"),bl[-1].get("height")
+breaks=miss=gaps=0
+for prev,cur in zip(bl,bl[1:]):
+    if cur.get("height")!=prev.get("height",0)+1: gaps+=1; continue
+    ph=cur.get("prev_hash")
+    if not ph: miss+=1; continue
+    if ph!=prev.get("hash"):
+        breaks+=1
+        if breaks<=3: print("  ✗ BREAK at height %s (prev_hash != hash of %s)"%(cur.get("height"),prev.get("height")))
+print("⬢ verify · %d blocks, heights %s..%s"%(len(bl),lo,hi))
+print("   links: %d breaks · %d missing prev_hash · %d height gaps"%(breaks,miss,gaps))
+# --- anchor check: did previously-seen history get rewritten under us? ---
+anc=(os.environ.get("ANCHOR") or "").split()
+by_h={b.get("height"):b for b in bl}
+tampered=False
+if len(anc)==2:
+    ah,ahash=int(anc[0]),anc[1]
+    b=by_h.get(ah)
+    if b is None:
+        print("   anchor: height %d not in this window (pull more with: chain.sh verify 2000)"%ah)
+    elif b.get("hash")==ahash:
+        print("   anchor: ✓ height %d unchanged since last check"%ah)
+    else:
+        tampered=True
+        print("   anchor: ⛔ HEIGHT %d WAS REWRITTEN"%ah)
+        print("           pinned %s"%ahash)
+        print("           now    %s"%b.get("hash"))
+else:
+    print("   anchor: none yet — pinning this run as the baseline")
+# never advance the anchor over a failure; that would launder the tamper away
+if breaks==0 and miss==0 and not tampered:
+    print("ANCHOR_OK %s %s"%(hi,bl[-1].get("hash")))
+    print("   VERDICT: chain is consistent and unchanged where we could check it.")
+else:
+    print("   VERDICT: ⛔ FAILED — anchor NOT advanced. Investigate before trusting this chain.")
+' 2>/dev/null | { out="$(cat)"; printf '%s\n' "$out" | grep -v '^ANCHOR_OK '
+        newanc="$(printf '%s\n' "$out" | grep '^ANCHOR_OK ' | head -1 | cut -d' ' -f2-)"
+        [ -n "$newanc" ] && printf '%s\n' "$newanc" > "$ANCHOR_FILE"; }
     ;;
   whoami)
     echo "$(marker)"
