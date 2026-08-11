@@ -146,6 +146,19 @@ post() { # post <src_id> <type> <symbol> <summary> <body> [data_json]
     echo "   GENIE_MARKER to a name that is not your OS account. Nothing was sent." >&2
     return 1
   fi
+  # RESERVED-IDENTITY BLOCK (fail closed): team identities are not writable by any node. Nobody —
+  # not even a team machine — inscribes as the team, so no block can be forged to look like us.
+  # The OS-login check above catches these only when the local-part happens to equal the login
+  # name; on any other machine 'blankcheck.agent' and 'wildflower.agent' sailed straight through.
+  # Measured 2026-08-08: 74 blocks reached the live chain under a reserved identity this way.
+  # Match on the LOCAL-PART so every TLD is covered at once (.agent/.wtf/.com/.eth/.bot/bare).
+  case "$(printf '%s' "$_localpart" | tr '[:upper:]' '[:lower:]')" in
+    yogi|blankcheck|wildflower|wildflowerbot|auto)
+      echo "⛔ refusing to inscribe: '$mk' is a RESERVED team identity — no node writes as the team." >&2
+      echo "   Author under this node's own marker instead (chain.sh whoami · genie_onboard.sh)." >&2
+      echo "   Nothing was sent." >&2
+      return 1 ;;
+  esac
   # -------------------------------------------------------------------------------------------
   # Commons-claim: if authoring under the shared 'genie' marker (unnamed node) and the caller
   # didn't supply a data blob, attach a claim token so this free skill stays CLAIMABLE by its
@@ -158,9 +171,32 @@ post() { # post <src_id> <type> <symbol> <summary> <body> [data_json]
   # data is a raw JSON object (already valid JSON), not an escaped string — append only if given
   [ -n "$dat" ] && payload="$payload,\"data\":$dat"
   payload="$payload}"
-  curl -fsS --max-time 12 -X POST "$API/api/chain/node-inscribe" \
-       -H 'Content-Type: application/json' -d "$payload" 2>/dev/null \
-    || { echo "⚠️  chain unreachable (work saved locally is unaffected)"; return 1; }
+  # FAIL LOUD + DIFFERENTIATED. The old line was `curl -fsS ... 2>/dev/null || echo unreachable`,
+  # which swallowed the server's real error and called EVERY failure "unreachable" — so a fixable
+  # HTTP 400 (e.g. "invalid marker") looked like a network blip and got retried forever, silently.
+  # That one line stranded weeks of skills. Never again: capture status+body, and branch.
+  #   return 0 = landed (2xx)   ·   2 = truly unreachable (retry)   ·   3 = server REJECTED (bug, LOUD)
+  local _resp _code _body _cerr="/tmp/.chain_curl_err.$$"
+  _resp="$(curl -sS --max-time 12 -X POST "$API/api/chain/node-inscribe" \
+             -H 'Content-Type: application/json' -d "$payload" -w $'\n%{http_code}' 2>"$_cerr")"
+  _code="${_resp##*$'\n'}"; _body="${_resp%$'\n'*}"
+  if [ -z "$_code" ] || [ "$_code" = "000" ]; then
+    echo "⚠️  chain UNREACHABLE (network): $(tail -1 "$_cerr" 2>/dev/null) — staged for retry." >&2
+    rm -f "$_cerr"; return 2
+  fi
+  rm -f "$_cerr"
+  case "$_code" in
+    2*) printf '%s' "$_body"; return 0 ;;
+    *)  local _err
+        _err="$(printf '%s' "$_body" | $PY -c 'import json,sys
+try: print(json.load(sys.stdin).get("error","(no error field)"))
+except: print(sys.stdin.read()[:200])' 2>/dev/null)"
+        echo "⛔ chain REJECTED the write (HTTP $_code): $_err" >&2
+        echo "   marker='$mk' src_id='$sid' — a rejection does NOT fix itself by retrying; fix the cause." >&2
+        mkdir -p "$HOME/.claude/genie"
+        printf '%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$_code" "$mk" "$sid :: $_err" >> "$HOME/.claude/genie/rejected_writes.log"
+        return 3 ;;
+  esac
 }
 
 # read + filter the live chain client-side (the server has no query param; we pull recent blocks
@@ -513,6 +549,16 @@ open(report_f,"w").write("\n".join(R)+"\n")
       prompt="  Install '$slug' by $TIER author? [y/N]: "
     fi
 
+    # No terminal = no consent, and that is the CORRECT outcome (a hook must never install).
+    # Probe the tty by OPENING it, not with `-r`: on macOS /dev/tty passes a permission test and
+    # then fails to open with "Device not configured", so reading blind printed a raw device error
+    # on a path that was working exactly as designed. Redirect ORDER matters — redirections apply
+    # left to right, so `: </dev/tty 2>/dev/null` fails BEFORE stderr is silenced. Silence first.
+    if ! : 2>/dev/null </dev/tty; then
+      echo "  ⏸  no terminal attached — consent can't be given here, so nothing was installed."
+      echo "     Review and approve it from an interactive shell:  chain.sh install $slug"
+      exit 0
+    fi
     printf '%s' "$prompt"
     IFS= read -r answer </dev/tty || answer=""
     ok=0
@@ -759,6 +805,29 @@ else:
   whoami)
     echo "$(marker)"
     ;;
+
+  health)
+    # RECONCILIATION TRIPWIRE — the guardrail that makes a silent inscribe-backlog impossible.
+    # Reads receipts vs the queues and answers ONE question: is our work actually settling to chain?
+    # Wired into session start (greet) so the moment writes fail, the next wake SCREAMS the real reason
+    # instead of it piling up unseen (how 3,581 skills got stranded). Exit 0 = clean, 1 = alarm.
+    q=0; r=0; rej=0
+    [ -s "$QUEUE_FILE" ] && q=$(grep -c . "$QUEUE_FILE" 2>/dev/null || echo 0)
+    [ -s "$RETRY_FILE" ] && r=$(grep -c . "$RETRY_FILE" 2>/dev/null || echo 0)
+    REJLOG="$HOME/.claude/genie/rejected_writes.log"
+    [ -s "$REJLOG" ] && rej=$(grep -c . "$REJLOG" 2>/dev/null || echo 0)
+    last="$(tail -1 "$RECEIPT_FILE" 2>/dev/null | cut -f1)"
+    if [ "$q" = 0 ] && [ "$r" = 0 ] && [ "$rej" = 0 ]; then
+      echo "⬢ chain health: clean — nothing stuck. last inscribe: ${last:-none}"
+      exit 0
+    fi
+    echo "⛔ CHAIN HEALTH ALARM — work is NOT fully settling to the chain:"
+    [ "$q"   -gt 0 ] && echo "   • $q staged (queued, not yet synced) → chain.sh sync"
+    [ "$r"   -gt 0 ] && echo "   • $r unreachable-retry (network — will land when back online)"
+    [ "$rej" -gt 0 ] && echo "   • $rej REJECTED (a bug, retry will NOT help) — latest: $(tail -1 "$REJLOG" 2>/dev/null | cut -f2,4)"
+    echo "   → fix any REJECTED reason at the source, then: chain.sh sync"
+    exit 1
+    ;;
   *)
-    echo "usage: chain.sh {login | skill <slug> <summary> [body] | queue <slug> <summary> [body] | sync | search <query> [limit] | mine [limit] | verify [limit] | claim <src_id> <your-name.agent> | install <slug> | pack <slug> | rate <slug> <1-5> | collab {open|send|pull|off} | whoami}"; exit 1;;
+    echo "usage: chain.sh {login | skill <slug> <summary> [body] | queue <slug> <summary> [body] | sync | search <query> [limit] | mine [limit] | verify [limit] | claim <src_id> <your-name.agent> | install <slug> | pack <slug> | rate <slug> <1-5> | collab {open|send|pull|off} | whoami | health}"; exit 1;;
 esac
