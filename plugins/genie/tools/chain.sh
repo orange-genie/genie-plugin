@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# chain.sh — the dependency-free wire from an installed Genie to the shared Wildflower Chain.
+# chain.sh — the dependency-free wire from an installed Genie to the shared OrangeGenie Mesh.
 # Every node writes as its OWN identity marker (chazz.agent, mikes.agent, novo.agent…). No admin
 # key, no local chain tooling required — just curl. The server (orange-genie API) holds the DB key,
 # forces authorship to the marker (unspoofable), and seals the block. This is what makes

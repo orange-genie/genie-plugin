@@ -25,7 +25,7 @@ printf '\n'
 printf '  %s╭%s╮%s\n' "$OR" "$BAR" "$R"
 printf '  %s│%s                                              %s│%s\n' "$OR" "$R" "$OR" "$R"
 printf '  %s│%s   🍊  %s                           %s│%s\n' "$OR" "$R" "$WORD" "$OR" "$R"
-printf '  %s│%s   %sthe lamp is lit · wildflower chain online%s  %s│%s\n' "$OR" "$R" "$D" "$R" "$OR" "$R"
+printf '  %s│%s   %sthe lamp is lit · orangegenie mesh online%s  %s│%s\n' "$OR" "$R" "$D" "$R" "$OR" "$R"
 printf '  %s│%s                                              %s│%s\n' "$OR" "$R" "$OR" "$R"
 printf '  %s│%s   %s▸%s %s%s/genie%s %swake%s    %s▸%s %s%s/lamp%s %saway%s              %s│%s\n' \
   "$OR" "$R" "$OR" "$R" "$B" "$OR" "$R" "$D" "$R" "$BL" "$R" "$B" "$BL" "$R" "$D" "$R" "$OR" "$R"

@@ -6,7 +6,7 @@
 # which fails on any machine without your keys (i.e. everyone but AUTO). So updates never
 # reached Chazz/Mike/Novo.
 #
-# The fix: the load-bearing wire — chain.sh (how a node writes to the shared Wildflower Chain)
+# The fix: the load-bearing wire — chain.sh (how a node writes to the shared OrangeGenie Mesh)
 # — self-updates over HTTPS into a stable per-user path (~/.claude/genie/) on every session.
 # HTTPS raw works on every machine, needs no auth, and is independent of the plugin version
 # system. Once ANY install has this hook, the chain wire auto-updates for that user forever —

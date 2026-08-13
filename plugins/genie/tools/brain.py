@@ -147,10 +147,59 @@ def _call_pool(system, user, max_tokens, env_files):
     return _openai_chat(POOL_URL.rstrip("/") + "/chat/completions", POOL_MODEL,
                         system, user, max_tokens, key=_key("GENIE_POOL_KEY", env_files), timeout=120)
 
+def _ollama_tags():
+    """Model names actually pulled on this machine. [] if ollama isn't answering."""
+    try:
+        with urllib.request.urlopen(f"{OLLAMA_HOST}/api/tags", timeout=2) as r:
+            return [m.get("name", "") for m in (json.loads(r.read()) or {}).get("models", [])]
+    except Exception:
+        return []
+
+
+def resolve_ollama_model(want=None, tags=None):
+    """Map a configured model name onto one that is actually pulled. None if there is no match.
+
+    THE BUG THIS EXISTS FOR: ollama does NOT treat an untagged name as a wildcard. Ask it for
+    'llama3.1' when only 'llama3.1:8b' is pulled and it answers `model not found`. brain.py then
+    degrades to the next provider — so the private, free, local path silently becomes a PAID
+    CLOUD call, and the user is billed for what they believed ran on their own machine. Same
+    trap for 'hermes3' vs 'hermes3:8b'.
+
+    Resolution is family-safe on purpose: 'hermes3' may only ever become a 'hermes3:*' tag. It
+    must never quietly answer as some other model — a wrong answer attributed to the model you
+    asked for is worse than no answer.
+    """
+    want = want or OLLAMA_MODEL
+    tags = _ollama_tags() if tags is None else tags
+    if not tags:
+        return None
+    if want in tags:                       # exact pin — always wins
+        return want
+    if ":" in want:                        # an explicit tag that isn't here: do NOT substitute
+        return None
+    family = want + ":"
+    matches = [t for t in tags if t.startswith(family)]
+    if not matches:
+        return None
+    if family + "latest" in matches:       # an explicit 'latest' is the operator's own choice
+        return family + "latest"
+
+    # Prefer the SMALLEST parameter count. Alphabetical sorting is actively wrong here — '70b'
+    # sorts before '8b', so a naive sort hands a Raspberry Pi the 70B and it dies. The people
+    # this path is built for are running old laptops and Pis; small-and-working beats
+    # big-and-swapping. Anyone who wants the big one pins it exactly.
+    def size_of(tag):
+        m = re.search(r"(\d+(?:\.\d+)?)\s*b\b", tag.split(":", 1)[-1], re.I)
+        return float(m.group(1)) if m else float("inf")
+
+    return sorted(matches, key=lambda t: (size_of(t), t))[0]
+
+
 def _call_ollama(system, user, max_tokens, env_files):
     """Truly local: the user's own machine, no key, no egress. Inert unless `ollama serve` runs."""
+    model = resolve_ollama_model() or OLLAMA_MODEL
     d = _http_json(f"{OLLAMA_HOST}/api/chat",
-                   {"model": OLLAMA_MODEL, "stream": False,
+                   {"model": model, "stream": False,
                     "options": {"num_predict": max_tokens},
                     "messages": [{"role": "system", "content": system},
                                  {"role": "user", "content": user}]},
@@ -164,7 +213,11 @@ PROVIDERS = {
                   "needs": "GROQ_API_KEY",      "tier": "free"},
     "pool":      {"call": _call_pool,      "egress": "PEER",  "model": lambda: POOL_MODEL,
                   "needs": None,                "tier": "free"},
-    "ollama":    {"call": _call_ollama,    "egress": "NONE",  "model": lambda: OLLAMA_MODEL,
+    # Report the model that will ACTUALLY be loaded, not the one configured — those differ
+    # whenever a name is untagged, and printing the wish instead of the fact is how the local
+    # path looked healthy while every call was really being served by a paid cloud.
+    "ollama":    {"call": _call_ollama,    "egress": "NONE",
+                  "model": lambda: resolve_ollama_model() or OLLAMA_MODEL,
                   "needs": None,                "tier": "local"},
 }
 
@@ -180,11 +233,11 @@ def available(env_files=()):
     out = {}
     for name, p in PROVIDERS.items():
         if name == "ollama":
-            try:
-                urllib.request.urlopen(f"{OLLAMA_HOST}/api/tags", timeout=1)
-                out[name] = True
-            except Exception:
-                out[name] = False
+            # A live socket is NOT availability. The daemon can be running with the configured
+            # model absent, and then every "local" call 404s and degrades to a paid cloud while
+            # this table cheerfully says yes. Require a model we can actually load — the same
+            # discipline as judging a crash loop by the pid rather than by the log.
+            out[name] = bool(resolve_ollama_model())
         elif name == "pool":
             out[name] = bool(POOL_URL)
         else:
@@ -281,7 +334,7 @@ def brain(system, user, feature="chat", tier=None, provider=None, max_tokens=800
 # A 70B open-weight model is not as smart as Opus. It does not have to be. Most of what makes an
 # answer GOOD is not raw reasoning -- it is knowing the one hard-won fact that turns a 40-minute
 # hunt into a single line ("a non-JSON 403 from Cloudflare is the WAF rejecting your user-agent,
-# not a bad key"). No frontier model knows that about YOUR stack. The Wildflower Chain does,
+# not a bad key"). No frontier model knows that about YOUR stack. The OrangeGenie Mesh does,
 # because we put it there.
 #
 # So: retrieve the proven skills first, hand them to the cheap fast model as ground truth, and it
@@ -517,7 +570,7 @@ def chain_context(question, k=4, max_chars=6000):
             card += f"\nGUARDRAIL: {d['guardrail']}"
         cards.append(redact(card))          # THE SEAL — last gate before it becomes context
     blob = "\n\n".join(cards)[:max_chars]
-    return ("\n\n--- PROVEN SKILLS FROM THE WILDFLOWER CHAIN (ground truth, learned the hard way "
+    return ("\n\n--- PROVEN SKILLS FROM THE ORANGEGENIE MESH (ground truth, learned the hard way "
             "on THIS stack — prefer these over your priors) ---\n" + blob,
             [d["slug"] for d in hits])
 
@@ -542,7 +595,8 @@ def _providers_table(env_files=()):
               f"{_EGRESS_SAY[p['egress']]:<28} {p['model']()}")
     print("\n  Only 'ollama' is genuinely private. 'pool' is a PEER's box — its win is reach, not privacy.")
     if not avail["ollama"]:
-        print("  ollama not running: `brew install ollama && ollama serve && ollama pull llama3.1`")
+        print("  ollama not running: `brew install ollama && ollama serve && ollama pull hermes3`")
+        print("  then: export GENIE_OLLAMA_MODEL=hermes3   (any pulled model works; llama3.1 too)")
     if not avail["pool"]:
         print("  pool not configured: set GENIE_POOL_URL to an OpenAI-compatible peer endpoint.")
 

@@ -2,7 +2,7 @@
 # video.sh — the node-side Video Genie wire. Dependency-free (curl + python3 only).
 #
 # Video Genie = Genie aimed at video: pull what a YouTube video actually SAYS, so Genie can
-# extract the idea/skill from it and inscribe that to the shared Wildflower Chain (chain.sh skill).
+# extract the idea/skill from it and inscribe that to the shared OrangeGenie Mesh (chain.sh skill).
 # This is the NODE capability — it needs NO backend, NO Supabase, NO creds. (AUTO's full external
 # Video-Genie intel agent — creator subscriptions, replay-density, private table — stays his.)
 #

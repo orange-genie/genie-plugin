@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# genie_onboard.sh — turn THIS machine into a Wildflower Chain NODE on first install.
+# genie_onboard.sh — turn THIS machine into an OrangeGenie Mesh NODE on first install.
 #
 # A node is not a name, and not a disk. By the end of this script the machine has:
 #   1. the chain client installed locally          (it can reach the chain unaided)
@@ -106,7 +106,7 @@ fi
 
 HOSTKIND="$(uname -s)-$(uname -m)"
 if bash "$CHAIN" skill "node-birth-$u" \
-  "Node '$u' joined the Wildflower Chain ($HOSTKIND) — identity established by work, per the node doctrine" \
+  "Node '$u' joined the OrangeGenie Mesh ($HOSTKIND) — identity established by work, per the node doctrine" \
   "PROPERTY: The birth record of node '$u'. A machine becomes a node by inscribing work under its own marker and locally-generated secret, not by announcing presence. This block is that first work — from here the node authors under '$u', and its contributions are attributed and payable to it.
 
 HOW: marker written to ~/.claude/genie_marker; a 32-byte secret generated on this machine (0600, never transmitted) with sha256 published as the claim commit that proves authorship; the chain client installed locally so the node operates unaided; this block inscribed, then read back from the chain to confirm.

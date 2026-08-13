@@ -8,7 +8,7 @@
       "cost": "free",
       "cmd": "bash \"$CLAUDE_PLUGIN_ROOT/tools/chain.sh\" search",
       "triggers": "recall, search my memory/chain, 'have we done X', find a skill, echo the void",
-      "summary": "Search the shared Wildflower Chain for a skill/answer. Networked (works on any machine), free.",
+      "summary": "Search the shared OrangeGenie Mesh for a skill/answer. Networked (works on any machine), free.",
       "creator_marker": "orangegenie",
       "price_per_call": 0.0
     },

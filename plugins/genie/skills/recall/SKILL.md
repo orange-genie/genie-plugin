@@ -1,11 +1,11 @@
 ---
 name: recall
-description: Search the shared Wildflower Chain for a skill/answer. Networked (works on any machine), free. TRIGGER when the user asks: recall, search my memory/chain, 'have we done X', find a skill, echo the void.
+description: Search the shared OrangeGenie Mesh for a skill/answer. Networked (works on any machine), free. TRIGGER when the user asks: recall, search my memory/chain, 'have we done X', find a skill, echo the void.
 ---
 
 # recall
 
-Search the shared Wildflower Chain for a skill/answer. Networked (works on any machine), free.
+Search the shared OrangeGenie Mesh for a skill/answer. Networked (works on any machine), free.
 
 **Cost lane:** `free`
 

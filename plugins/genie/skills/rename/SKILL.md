@@ -1,11 +1,11 @@
 ---
 name: rename
-description: Change the user's Wildflower Chain username (their identity marker). TRIGGER when the user asks to change / rename / update their username, handle, chain name, or marker — e.g. "change my username", "rename me to X", "I want a different chain name", "update my handle". Limited to 2 renames per 60 days, enforced on-chain.
+description: Change the user's OrangeGenie Mesh username (their identity marker). TRIGGER when the user asks to change / rename / update their username, handle, chain name, or marker — e.g. "change my username", "rename me to X", "I want a different chain name", "update my handle". Limited to 2 renames per 60 days, enforced on-chain.
 ---
 
 # Rename (change your chain username)
 
-The username is the user's **identity marker** on the Wildflower Chain — the account every skill, contribution, and payout is credited to. This skill changes it safely.
+The username is the user's **identity marker** on the OrangeGenie Mesh — the account every skill, contribution, and payout is credited to. This skill changes it safely.
 
 ## What a rename does
 - **Past work is preserved.** The chain is append-only; everything done under the old name stays. A public **RENAME block** links `old → new`, so aggregators credit the whole history to the new name.

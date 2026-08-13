@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# rename.sh — change your Wildflower Chain username (marker). Max 2 renames per 60 days.
+# rename.sh — change your OrangeGenie Mesh username (marker). Max 2 renames per 60 days.
 # The server enforces the limit by reading the chain (not a local counter), links old→new
 # publicly so your past work still credits you, and only swaps your LOCAL marker AFTER the
 # chain accepts the rename. Reserved and already-taken names are refused.

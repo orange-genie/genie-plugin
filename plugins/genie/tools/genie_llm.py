@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""genie_llm.py — a drop-in OpenAI endpoint whose brain is the Wildflower Chain.
+"""genie_llm.py — a drop-in OpenAI endpoint whose brain is the OrangeGenie Mesh.
 
 THE PRODUCT IN ONE LINE
     Point ANY existing tool at this URL instead of Groq's, and it gets the same fast open-weight
@@ -68,7 +68,7 @@ HARVEST = os.environ.get("GENIE_HARVEST", "") == "1"   # off by default. Opt-in 
 PRICE_PER_CALL = float(os.environ.get("GENIE_PRICE_PER_CALL", "0.01"))   # what a PAID call earns
 
 GROUND_HEADER = (
-    "\n\n--- PROVEN SKILLS FROM THE WILDFLOWER CHAIN ---\n"
+    "\n\n--- PROVEN SKILLS FROM THE ORANGEGENIE MESH ---\n"
     "These were learned the hard way on real systems. They are ground truth: prefer them over "
     "your priors, and if one contradicts what you would otherwise say, the skill wins. Cite the "
     "skill slug when you use it. If none of them apply, ignore them and answer normally — do not "

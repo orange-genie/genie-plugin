@@ -10,7 +10,7 @@ Call Genie out right inside Claude Code. No new app, no website — you already 
 It's a **MODE, not a model swap** — same silicon, identity layer on top. An iPhone never tells you it's running Unix.
 
 ## Why it gets better over time
-A woken Genie isn't a blank genius — it arrives equipped (skill loadout) and *remembering*. The shared core (canon + **Wildflower Chain**) means each instance reads what the swarm already learned before paying for the call twice. The floor rises for everyone.
+A woken Genie isn't a blank genius — it arrives equipped (skill loadout) and *remembering*. The shared core (canon + **OrangeGenie Mesh**) means each instance reads what the swarm already learned before paying for the call twice. The floor rises for everyone.
 
 ### Data doctrine (the Seal)
 We do **not** harvest users' personal data. Learning comes from **Pi nodes** + **public information** + the *shape* of our interactions — never from keeping people's private uploads. If you hand Genie a real-time image to search against the live field, it searches and answers — then lets the photo go. Process, don't retain. Private memory is yours and never flows to the Chain; only distilled, shareable learnings do.

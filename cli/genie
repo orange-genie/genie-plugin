@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+"""genie — Orange Genie in your terminal. No Claude Code required.
+
+    genie "why is my launchd job not finding yt-dlp?"     ask, grounded on the chain
+    genie recall <words>                                  search the chain directly
+    genie providers                                       which brain you have, and where tokens go
+    genie whoami                                          your identity on the Mesh
+    genie update                                          re-fetch the parts from the public repo
+
+WHAT THIS IS
+    A thin command over three pieces that already exist and already work on their own:
+      brain.py   four providers (ollama / pool / groq / anthropic), degrades until one answers
+      chain.sh   read + write the OrangeGenie Mesh over plain HTTPS
+      canon.md   who Genie is
+    This file is the glue and nothing more. It deliberately implements no brain and no chain
+    client — those live in the plugin repo and are shared with every other surface, so a fix
+    there reaches here for free.
+
+WHY grounded() AND NOT brain()
+    grounded() feeds the model the chain's cheat sheet for your question first, and reports
+    which proven skills it used. That is the whole product: a commodity open-weight model that
+    answers like it has lived through everything the network already solved. An ungrounded
+    answer is just a chatbot.
+
+YOUR TOKENS
+    Every answer prints which provider served it and whether the text left your machine.
+    Only `ollama` is genuinely private — it runs on your own hardware and nothing leaves.
+
+RECREATE: install.sh next to this file. Needs python3 + curl. No pip, no account, no key from us.
+"""
+import os, sys, subprocess, textwrap
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)                     # brain.py sits beside this file
+CHAIN = os.path.join(HERE, "chain.sh")
+CANON = os.path.join(HERE, "canon.md")
+REPO_RAW = "https://raw.githubusercontent.com/orange-genie/genie-plugin/main"
+
+BOLD, DIM, ORANGE, RESET = "\033[1m", "\033[2m", "\033[38;5;208m", "\033[0m"
+if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
+    BOLD = DIM = ORANGE = RESET = ""
+
+
+def canon():
+    """The system prompt. Without it this is a generic model with a chain lookup bolted on."""
+    try:
+        with open(CANON) as f:
+            return f.read()
+    except OSError:
+        return "You are Genie: terse, useful, lead with the answer, end on a statement."
+
+
+def die(msg, code=1):
+    print(f"{msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def no_brain_help():
+    """Reached when all four providers are unreachable. Say the fix, do not just fail."""
+    print(textwrap.dedent(f"""
+        {BOLD}No brain is reachable yet.{RESET} Pick one — the first is free and private:
+
+          {ORANGE}1. Your own machine (private, free, nothing leaves){RESET}
+             brew install ollama          # or: curl -fsSL https://ollama.com/install.sh | sh
+             ollama serve &
+             ollama pull hermes3          # ~4.7 GB. llama3.1 also works.
+             echo 'export GENIE_OLLAMA_MODEL=hermes3' >> ~/.zshrc
+
+          {ORANGE}2. Groq (free tier, fast, runs in their cloud){RESET}
+             export GROQ_API_KEY=...      # console.groq.com
+
+          {ORANGE}3. A peer's machine in your pool (reach, not privacy){RESET}
+             export GENIE_POOL_URL=http://<peer>:11434/v1
+
+        Then: genie providers
+    """).rstrip())
+
+
+def cmd_ask(question):
+    try:
+        import brain
+    except ImportError:
+        die("✗ brain.py is missing next to this script. Run: genie update")
+
+    if not any(brain.available().values()):
+        no_brain_help()
+        sys.exit(1)
+
+    txt, info = brain.grounded(canon(), question, k=4)
+    if txt is None:
+        die(f"✗ no brain answered — {info.get('why', 'unknown')}")
+
+    where = {"CLOUD": "left your machine", "PEER": "went to a peer", "NONE": "never left your machine"}
+    print(f"\n{txt}\n")
+    print(f"{DIM}[{info.get('provider')} · {info.get('model')} · "
+          f"{where.get(info.get('egress'), '?')}]{RESET}")
+    if info.get("skills"):
+        print(f"{DIM}[grounded on: {', '.join(info['skills'])}]{RESET}")
+    else:
+        print(f"{DIM}[not grounded — the chain had nothing on this yet]{RESET}")
+
+
+def cmd_chain(args):
+    if not os.path.exists(CHAIN):
+        die("✗ chain.sh is missing next to this script. Run: genie update")
+    sys.exit(subprocess.call(["bash", CHAIN] + args))
+
+
+def cmd_providers():
+    try:
+        import brain
+    except ImportError:
+        die("✗ brain.py is missing next to this script. Run: genie update")
+    brain._providers_table()
+    if not any(brain.available().values()):
+        no_brain_help()
+
+
+def cmd_update():
+    """Re-fetch the shared parts. They live in the public plugin repo, so a fix there lands here."""
+    files = [("plugins/genie/tools/brain.py", "brain.py"),
+             ("plugins/genie/tools/chain.sh", "chain.sh"),
+             ("plugins/genie/skills/wake/canon.md", "canon.md")]
+    for remote, local in files:
+        dest = os.path.join(HERE, local)
+        rc = subprocess.call(["curl", "-fsSL", f"{REPO_RAW}/{remote}", "-o", dest])
+        print(f"  {'✓' if rc == 0 else '✗'} {local}")
+        if rc == 0 and local.endswith(".sh"):
+            os.chmod(dest, 0o755)
+    print("⬢ up to date.")
+
+
+def main():
+    a = sys.argv[1:]
+    if not a or a[0] in ("-h", "--help", "help"):
+        print(__doc__)
+        return
+    cmd = a[0]
+    if cmd == "providers":
+        return cmd_providers()
+    if cmd == "update":
+        return cmd_update()
+    if cmd in ("recall", "search"):
+        return cmd_chain(["search"] + a[1:])
+    # Every real chain.sh subcommand, passed straight through. Kept in sync with the case
+    # labels in chain.sh — anything NOT in this set is treated as a question, so a missing
+    # entry here would silently send a command to the model instead of the chain.
+    if cmd in ("login", "skill", "queue", "sync", "mine", "claim", "install",
+               "pack", "rate", "collab", "verify", "whoami", "health"):
+        return cmd_chain(a)
+    # anything else is a question
+    cmd_ask(" ".join(a))
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print()
