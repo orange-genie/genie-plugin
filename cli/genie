@@ -31,7 +31,12 @@ RECREATE: install.sh next to this file. Needs python3 + curl. No pip, no account
 """
 import os, sys, subprocess, textwrap
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+# realpath, NOT abspath: install.sh symlinks ~/.local/bin/genie -> ~/.orangegenie/cli/genie,
+# and abspath does not resolve symlinks. Run through the symlink, HERE became ~/.local/bin
+# and every sibling file (chain.sh, canon.md, genie_llm.py) was "missing" — while `import
+# brain` still worked, because Python resolves sys.path[0] separately. That split is what
+# made it look fine: asking worked, chain commands did not.
+HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, HERE)                     # brain.py sits beside this file
 CHAIN = os.path.join(HERE, "chain.sh")
 CANON = os.path.join(HERE, "canon.md")
