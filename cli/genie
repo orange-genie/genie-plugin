@@ -4,6 +4,7 @@
     genie "why is my launchd job not finding yt-dlp?"     ask, grounded on the chain
     genie recall <words>                                  search the chain directly
     genie providers                                       which brain you have, and where tokens go
+    genie serve                                           run the OpenAI-compatible endpoint (Hermes, Cursor, …)
     genie whoami                                          your identity on the Mesh
     genie update                                          re-fetch the parts from the public repo
 
@@ -116,10 +117,47 @@ def cmd_providers():
         no_brain_help()
 
 
+def cmd_serve(args):
+    """Run the local OpenAI-compatible endpoint, so ANY existing agent can use the chain.
+
+    This is the integration door. Hermes Agent, Cursor, Continue, LangChain, the OpenAI SDKs —
+    they all already speak this protocol, so pointing one at http://localhost:8756/v1 puts the
+    chain underneath a tool the person already uses. Nothing to adopt, one line to change.
+
+    Defaults are set for SELF-HOSTED use, and they matter:
+      GENIE_OPEN=1   no API key. Correct ONLY because this binds to your own machine — the key
+                     lock upstream exists to stop strangers spending someone else's budget, not
+                     to gate you on your own box. Never set this on a public instance.
+      GENIE_UPSTREAM if you set it to your own ollama, nothing leaves your machine and you still
+                     get the identical chain grounding. If you don't, it forwards to Groq's
+                     cloud — fast and nearly free, but NOT private. That choice is yours to
+                     make knowingly, so `serve` prints which one is in force.
+    """
+    llm = os.path.join(HERE, "genie_llm.py")
+    if not os.path.exists(llm):
+        die("✗ genie_llm.py is missing next to this script. Run: genie update")
+    env = dict(os.environ)
+    env.setdefault("GENIE_OPEN", "1")
+    upstream = env.get("GENIE_UPSTREAM", "https://api.groq.com/openai/v1")
+    private = "127.0.0.1" in upstream or "localhost" in upstream
+    # flush=True is load-bearing: stdout is block-buffered when this is piped to a log,
+    # and the child server writes to the same fd unbuffered — so without an explicit
+    # flush the child's banner lands first and OUR egress line never appears at all
+    # (the parent only flushes at exit, and a server never exits). The one line that
+    # tells a user where their tokens are going must not be the line that gets eaten.
+    print(f"{ORANGE}⬢ serving genie-1{RESET}  upstream: {upstream}", flush=True)
+    print(f"  {'tokens never leave this machine' if private else 'NOT private — tokens go to that cloud'}", flush=True)
+    if not private:
+        print(f"  {DIM}for a fully private setup: GENIE_UPSTREAM=http://127.0.0.1:11434/v1 "
+              f"GENIE_UPSTREAM_MODEL=hermes3:8b genie serve{RESET}", flush=True)
+    sys.exit(subprocess.call([sys.executable, "-u", llm] + args, env=env))
+
+
 def cmd_update():
     """Re-fetch the shared parts. They live in the public plugin repo, so a fix there lands here."""
     files = [("plugins/genie/tools/brain.py", "brain.py"),
              ("plugins/genie/tools/chain.sh", "chain.sh"),
+             ("plugins/genie/tools/genie_llm.py", "genie_llm.py"),
              ("plugins/genie/skills/wake/canon.md", "canon.md")]
     for remote, local in files:
         dest = os.path.join(HERE, local)
@@ -140,6 +178,8 @@ def main():
         return cmd_providers()
     if cmd == "update":
         return cmd_update()
+    if cmd == "serve":
+        return cmd_serve(a[1:])
     if cmd in ("recall", "search"):
         return cmd_chain(["search"] + a[1:])
     # Every real chain.sh subcommand, passed straight through. Kept in sync with the case

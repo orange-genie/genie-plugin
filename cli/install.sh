@@ -39,6 +39,7 @@ for pair in \
   "cli/genie:genie" \
   "plugins/genie/tools/brain.py:brain.py" \
   "plugins/genie/tools/chain.sh:chain.sh" \
+  "plugins/genie/tools/genie_llm.py:genie_llm.py" \
   "plugins/genie/skills/wake/canon.md:canon.md"
 do
   remote="${pair%%:*}"; local="${pair##*:}"
