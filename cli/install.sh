@@ -40,13 +40,14 @@ for pair in \
   "plugins/genie/tools/brain.py:brain.py" \
   "plugins/genie/tools/chain.sh:chain.sh" \
   "plugins/genie/tools/genie_llm.py:genie_llm.py" \
+  "plugins/genie/tools/genie_onboard.sh:genie_onboard.sh" \
   "plugins/genie/skills/wake/canon.md:canon.md"
 do
   remote="${pair%%:*}"; local="${pair##*:}"
   curl -fsSL "$RAW/$remote" -o "$DIR/$local" || { echo "✗ could not fetch $local"; exit 1; }
   echo "  ✓ $local"
 done
-chmod +x "$DIR/genie" "$DIR/chain.sh"
+chmod +x "$DIR/genie" "$DIR/chain.sh" "$DIR/genie_onboard.sh"
 
 # ── 3. put `genie` on PATH ────────────────────────────────────────────────────────────────
 ln -sf "$DIR/genie" "$BIN/genie"
@@ -72,7 +73,12 @@ python3 "$DIR/genie" providers || true
 
 cat <<'EOF'
 
-⬢ Installed. Try it:
+⬢ Installed. First, claim your name on the network:
+
+     genie login "the-name-you-want"
+
+   That is your identity — every skill you contribute and every payout resolves to it.
+   Then try it:
 
      genie "what is proof-of-availability?"
      genie recall launchd

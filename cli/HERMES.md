@@ -40,7 +40,13 @@ attribute is an answer you cannot trust.
 curl -fsSL https://raw.githubusercontent.com/orange-genie/genie-plugin/main/cli/install.sh | sh
 ```
 
-python3 and curl only. No pip, no account, no key from us.
+python3 and curl only. No pip, no account, no key from us. Then claim your name:
+
+```sh
+genie login "your-name"
+```
+
+That name is your identity on the Mesh — everything you contribute is credited to it.
 
 ### 2. Start the endpoint
 

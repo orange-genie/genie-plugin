@@ -5,6 +5,7 @@
     genie recall <words>                                  search the chain directly
     genie providers                                       which brain you have, and where tokens go
     genie serve                                           run the OpenAI-compatible endpoint (Hermes, Cursor, …)
+    genie login "<name>"                                  claim your identity on the Mesh (do this first)
     genie whoami                                          your identity on the Mesh
     genie update                                          re-fetch the parts from the public repo
 
@@ -158,11 +159,30 @@ def cmd_serve(args):
     sys.exit(subprocess.call([sys.executable, "-u", llm] + args, env=env))
 
 
+def cmd_login(args):
+    """Claim a name on the Mesh. This is what makes chain commands work on a fresh install.
+
+    Without a marker, chain.sh answers "Not logged in" to whoami/recall/inscribe — which is the
+    first thing a new user tries, so it has to be one obvious command. Onboarding writes the
+    marker, generates this node's OWN secret locally, and inscribes a birth block, because
+    identity here is established by WORK rather than by a presence ping. Nothing is broadcast;
+    nobody can see when you are online.
+    """
+    onboard = os.path.join(HERE, "genie_onboard.sh")
+    if not os.path.exists(onboard):
+        die("✗ genie_onboard.sh is missing next to this script. Run: genie update")
+    if not args:
+        die('usage: genie login "<the name you want on the network>"\n'
+            "  This is your identity: every skill you contribute and every payout resolves to it.")
+    sys.exit(subprocess.call(["bash", onboard] + args))
+
+
 def cmd_update():
     """Re-fetch the shared parts. They live in the public plugin repo, so a fix there lands here."""
     files = [("plugins/genie/tools/brain.py", "brain.py"),
              ("plugins/genie/tools/chain.sh", "chain.sh"),
              ("plugins/genie/tools/genie_llm.py", "genie_llm.py"),
+             ("plugins/genie/tools/genie_onboard.sh", "genie_onboard.sh"),
              ("plugins/genie/skills/wake/canon.md", "canon.md")]
     for remote, local in files:
         dest = os.path.join(HERE, local)
@@ -190,7 +210,9 @@ def main():
     # Every real chain.sh subcommand, passed straight through. Kept in sync with the case
     # labels in chain.sh — anything NOT in this set is treated as a question, so a missing
     # entry here would silently send a command to the model instead of the chain.
-    if cmd in ("login", "skill", "queue", "sync", "mine", "claim", "install",
+    if cmd == "login":
+        return cmd_login(a[1:])
+    if cmd in ("skill", "queue", "sync", "mine", "claim", "install",
                "pack", "rate", "collab", "verify", "whoami", "health"):
         return cmd_chain(a)
     # anything else is a question
