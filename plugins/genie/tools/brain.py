@@ -594,11 +594,11 @@ def _providers_table(env_files=()):
         print(f"  {name:8} {'yes' if avail[name] else 'no':>9}  "
               f"{_EGRESS_SAY[p['egress']]:<28} {p['model']()}")
     print("\n  Only 'ollama' is genuinely private. 'pool' is a PEER's box — its win is reach, not privacy.")
-    if not avail["ollama"]:
-        print("  ollama not running: `brew install ollama && ollama serve && ollama pull hermes3`")
-        print("  then: export GENIE_OLLAMA_MODEL=hermes3   (any pulled model works; llama3.1 too)")
-    if not avail["pool"]:
-        print("  pool not configured: set GENIE_POOL_URL to an OpenAI-compatible peer endpoint.")
+    # This table REPORTS state; it does not prescribe fixes. The CLI's no_brain_help() is the
+    # single owner of "here is how to get a brain" — when three files each printed their own
+    # version, a new user got the same ollama instructions three times in one screen.
+    if not any(avail.values()):
+        print("\n  Nothing reachable. Run `genie providers` after setting one up.")
 
 if __name__ == "__main__":
     a = sys.argv[1:]

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """genie — Orange Genie in your terminal. No Claude Code required.
 
-    genie "why is my launchd job not finding yt-dlp?"     ask, grounded on the chain
+    genie                                                 open a session and just talk
+    genie "why is my launchd job not finding yt-dlp?"     one-shot question
     genie recall <words>                                  search the chain directly
     genie providers                                       which brain you have, and where tokens go
     genie serve                                           run the OpenAI-compatible endpoint (Hermes, Cursor, …)
@@ -30,7 +31,7 @@ YOUR TOKENS
 
 RECREATE: install.sh next to this file. Needs python3 + curl. No pip, no account, no key from us.
 """
-import os, sys, subprocess, textwrap
+import os, sys, shutil, subprocess, textwrap
 
 # realpath, NOT abspath: install.sh symlinks ~/.local/bin/genie -> ~/.orangegenie/cli/genie,
 # and abspath does not resolve symlinks. Run through the symlink, HERE became ~/.local/bin
@@ -62,24 +63,33 @@ def die(msg, code=1):
     sys.exit(code)
 
 
-def no_brain_help():
-    """Reached when all four providers are unreachable. Say the fix, do not just fail."""
+def no_brain_help(brief=False):
+    """The ONE place that explains how to get a brain.
+
+    It used to be three: this function, brain.py's provider table, and install.sh's closing
+    banner all printed their own ollama instructions, so a new user's first screen showed the
+    same three commands three times and buried the one action that mattered. The table now
+    reports state only, install.sh defers to the installer prompt, and this is the single voice.
+
+    brief=True is the one-liner used when the user is mid-flow and just needs the pointer.
+    """
+    if brief:
+        print(f"{DIM}No brain reachable. Set one up: genie providers{RESET}")
+        return
+    mac = sys.platform == "darwin"
+    get = "brew install ollama" if (mac and shutil.which("brew")) else \
+          "curl -fsSL https://ollama.com/install.sh | sh"
     print(textwrap.dedent(f"""
-        {BOLD}No brain is reachable yet.{RESET} Pick one — the first is free and private:
+        {BOLD}No brain is reachable.{RESET} The free and private option runs on this machine:
 
-          {ORANGE}1. Your own machine (private, free, nothing leaves){RESET}
-             brew install ollama          # or: curl -fsSL https://ollama.com/install.sh | sh
-             ollama serve &
-             ollama pull hermes3          # ~4.7 GB. llama3.1 also works.
-             echo 'export GENIE_OLLAMA_MODEL=hermes3' >> ~/.zshrc
+          {get}
+          ollama serve &
+          ollama pull hermes3          {DIM}# about 4.7 GB{RESET}
 
-          {ORANGE}2. Groq (free tier, fast, runs in their cloud){RESET}
-             export GROQ_API_KEY=...      # console.groq.com
+        {DIM}Nothing you type leaves your computer on that setting.{RESET}
 
-          {ORANGE}3. A peer's machine in your pool (reach, not privacy){RESET}
-             export GENIE_POOL_URL=http://<peer>:11434/v1
-
-        Then: genie providers
+        Already have a Groq key?  export GROQ_API_KEY=...
+        Using a peer's machine?   export GENIE_POOL_URL=http://<peer>:11434/v1
     """).rstrip())
 
 
@@ -193,11 +203,55 @@ def cmd_update():
     print("⬢ up to date.")
 
 
+def cmd_session():
+    """Bare `genie` opens a conversation. This is the product: open a terminal, type genie, talk.
+
+    Printing help here was wrong — a new user types the name of the thing they installed and
+    expects to be in it, not to be handed a manual. One-shot `genie "question"` still works for
+    scripting; this is the interactive door.
+    """
+    try:
+        import brain
+    except ImportError:
+        die("✗ brain.py is missing next to this script. Run: genie update")
+
+    if not any(brain.available().values()):
+        no_brain_help()
+        return
+
+    sysmsg = canon()
+    print(f"{ORANGE}⬢ Genie{RESET}  {DIM}— ask anything. Ctrl-D or 'exit' to leave.{RESET}\n")
+    while True:
+        try:
+            q = input(f"{ORANGE}›{RESET} ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+        if not q:
+            continue
+        if q.lower() in ("exit", "quit", "bye"):
+            return
+        txt, info = brain.grounded(sysmsg, q, k=4)
+        if txt is None:
+            print(f"{DIM}(no brain answered — {info.get('why','unknown')}){RESET}\n")
+            continue
+        where = {"CLOUD": "left your machine", "PEER": "went to a peer",
+                 "NONE": "never left your machine"}
+        print(f"\n{txt}\n")
+        print(f"{DIM}[{info.get('provider')} · {info.get('model')} · "
+              f"{where.get(info.get('egress'),'?')}]{RESET}")
+        if info.get("skills"):
+            print(f"{DIM}[grounded on: {', '.join(info['skills'])}]{RESET}")
+        print()
+
+
 def main():
     a = sys.argv[1:]
-    if not a or a[0] in ("-h", "--help", "help"):
+    if a and a[0] in ("-h", "--help", "help"):
         print(__doc__)
         return
+    if not a:
+        return cmd_session()
     cmd = a[0]
     if cmd == "providers":
         return cmd_providers()

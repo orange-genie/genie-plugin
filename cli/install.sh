@@ -66,6 +66,27 @@ case ":$PATH:" in
     ;;
 esac
 
+# ── 3b. WSL: make `genie` work from PowerShell too ────────────────────────────────────────
+# A Windows user installs from PowerShell via `wsl bash -c "curl … | sh"`, so the install
+# lands inside WSL and PowerShell cannot see the command. They then type `genie` in the
+# window they just used and get "not recognized" — which reads as a failed install. This
+# writes a one-line forwarding function into their PowerShell profile so `genie` works from
+# either shell. Appended only if it is not already there; their profile is never truncated.
+if grep -qi microsoft /proc/version 2>/dev/null; then
+  PS_SHIM='function genie { wsl genie @args }'
+  if command -v powershell.exe >/dev/null 2>&1; then
+    powershell.exe -NoProfile -Command "
+      if (!(Test-Path \$PROFILE)) { New-Item -ItemType File -Path \$PROFILE -Force | Out-Null }
+      if (!(Select-String -Path \$PROFILE -Pattern 'function genie' -Quiet)) {
+        Add-Content \$PROFILE '$PS_SHIM'
+      }" >/dev/null 2>&1 \
+      && echo "  ✓ genie wired into PowerShell (open a new PowerShell window)" \
+      || echo "  ! could not write the PowerShell profile — run this in PowerShell: $PS_SHIM"
+  else
+    echo "  ! to use genie from PowerShell, run there: $PS_SHIM"
+  fi
+fi
+
 # ── 4. tell them the truth about which brain they have ────────────────────────────────────
 echo
 echo "⬢ Checking what brain this machine can reach…"
