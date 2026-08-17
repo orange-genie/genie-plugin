@@ -382,7 +382,42 @@ EOF
     # concluding "the API strips bodies" is what sent a whole night down a workaround; there is
     # no need to smuggle content through data.body. Verify: ?limit=100 -> 0 bodies, add
     # &full=1 -> 92 of 100.
-    curl -fsS --max-time 15 "$API/api/chain?limit=500&full=1" 2>/dev/null \
+    # PAGINATE — the chain outgrew one page. A single limit=500 fetch went blind below the
+    # newest 500 blocks, so once the catalog passed that, `install` could not find most of it
+    # (4,300+ blocks and climbing; ~2,200 skills sat under the window). Two phases, because
+    # the naive fix is worse than the bug: paging with &full=1 would pull EVERY body on EVERY
+    # install, which is exactly the egress blow-up the column default exists to prevent.
+    #   phase 1 — walk CHEAP pages (no bodies) to find the block's height
+    #   phase 2 — fetch that ONE block with &full=1
+    _h=""; _before=""; _page=0
+    while [ "$_page" -lt 40 ]; do
+      _u="$API/api/chain?limit=500"
+      [ -n "$_before" ] && _u="$_u&before=$_before"
+      curl -fsS --max-time 15 "$_u" -o "$tmp/page.json" 2>/dev/null || break
+      _h="$(SLUG="$slug" $PY -c '
+import json,sys,os,re
+slug=os.environ["SLUG"].lower()
+def _n(s): return re.sub(r"[^a-z0-9]+","-",str(s).lower()).strip("-")
+s=_n(slug)
+try: blocks=json.load(open(sys.argv[1])).get("blocks",[])
+except Exception: sys.exit(0)
+for b in blocks:
+    sid=_n(b.get("src_id",""))
+    if sid==s or sid.endswith("-"+s) or ("skill-"+s) in sid or s in _n(b.get("summary","")):
+        print(b.get("height","")); break
+' "$tmp/page.json" 2>/dev/null)"
+      [ -n "$_h" ] && break
+      _before="$($PY -c 'import json,sys
+try: print(json.load(open(sys.argv[1])).get("next_before") or "")
+except Exception: print("")' "$tmp/page.json" 2>/dev/null)"
+      [ -z "$_before" ] && break
+      _page=$((_page+1))
+    done
+    if [ -z "$_h" ]; then
+      echo "✗ no skill '$slug' found on the chain."
+      exit 0
+    fi
+    curl -fsS --max-time 15 "$API/api/chain?limit=1&full=1&before=$((_h+1))" 2>/dev/null \
       | SLUG="$slug" $PY -c '
 import json,sys,os,re,hashlib,gzip,base64
 slug=os.environ["SLUG"].lower()
@@ -427,7 +462,19 @@ prev=str(b.get("prev_hash","")); h=str(b.get("height","")); ts=str(b.get("ts",""
 # as-returned; 282 verify once the offset form is folded back to Z. Without this the review
 # stamps "TAMPERED" on every honest skill on the chain and teaches users to click through the
 # one warning that is supposed to mean something.
-ts_h=re.sub(r"\+00:00$","Z",str(ts))
+# ...AND THE TRIMMED ZEROS MUST GO BACK ON. Folding "+00:00"->"Z" was only half the repair.
+# new Date().toISOString() ALWAYS emits exactly 3 fractional digits ("...850Z"), but Postgres
+# stores a timestamptz and returns it with trailing zeros REMOVED ("...85+00:00"). Rehashing
+# ".85Z" against a seal computed over ".850Z" can never match. Measured on the live chain:
+# EVERY failing block had <3 fractional digits and EVERY 3-digit block passed — 100%
+# correlation, ~10% of all blocks (1 in 10 timestamps ends in 0, 1 in 100 in 00). Right-pad
+# to 3 and the whole chain verifies. Without this, honest skills read as TAMPERED and users
+# learn to click through the one warning that is supposed to mean something.
+def _seal_ts(t):
+    t=re.sub(r"\+00:00$","Z",str(t))
+    m=re.match(r"^(.*T\d\d:\d\d:\d\d)(?:\.(\d+))?Z$",t)
+    return "%s.%sZ"%(m.group(1),((m.group(2) or "").ljust(3,"0"))[:3]) if m else t
+ts_h=_seal_ts(ts)
 calc=hashlib.sha256(("%s|%s|%s|%s|%s"%(prev,h,ts_h,summ,body)).encode("utf-8")).hexdigest()
 stored=str(b.get("hash",""))
 integrity="ok" if (stored and calc==stored) else "bad"
