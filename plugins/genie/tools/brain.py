@@ -138,6 +138,29 @@ def _call_groq(system, user, max_tokens, env_files):
     return _openai_chat("https://api.groq.com/openai/v1/chat/completions",
                         GROQ_MODEL, system, user, max_tokens, key=k)
 
+GENIE1_URL = os.environ.get("GENIE1_URL", "https://orangegenie-api-production.up.railway.app/v1")
+
+def _call_genie1(system, user, max_tokens, env_files):
+    """genie-1, hosted. The brain a fresh install reaches with NO key and NO download.
+
+    This is what makes the product work out of the box: before it existed, a new user finished
+    the installer and was handed a menu of providers to go set up, which is a kit, not a thing
+    you can use. It needs no credential — identity is the chain marker, and the free tier is
+    metered server-side.
+    """
+    mk = ""
+    try:
+        mk = open(os.path.expanduser("~/.claude/genie_marker")).read().strip()
+    except Exception:
+        pass
+    d = _http_json(GENIE1_URL.rstrip("/") + "/chat/completions",
+                   {"model": "genie-1", "max_tokens": max_tokens,
+                    "messages": [{"role": "system", "content": system},
+                                 {"role": "user", "content": user}]},
+                   {"x-genie-marker": mk} if mk else {}, timeout=120)
+    return (d["choices"][0]["message"]["content"] or "").strip() or None
+
+
 def _call_pool(system, user, max_tokens, env_files):
     """A PEER's machine serves this call. The pool's win is REACH (a 70B when your box holds a
     7B), never privacy -- your tokens land on someone else's disk. Any OpenAI-compatible endpoint
@@ -211,6 +234,11 @@ PROVIDERS = {
                   "needs": "ANTHROPIC_API_KEY", "tier": "premium"},
     "groq":      {"call": _call_groq,      "egress": "CLOUD", "model": lambda: GROQ_MODEL,
                   "needs": "GROQ_API_KEY",      "tier": "free"},
+    # Hosted genie-1: no key, works on a bare install. egress is CLOUD and reported as such —
+    # hiding which model runs underneath is branding; hiding that the words left the machine
+    # would be the unverifiable-privacy claim this project exists to oppose.
+    "genie-1":   {"call": _call_genie1,    "egress": "CLOUD", "model": lambda: "genie-1",
+                  "needs": None,                "tier": "free"},
     "pool":      {"call": _call_pool,      "egress": "PEER",  "model": lambda: POOL_MODEL,
                   "needs": None,                "tier": "free"},
     # Report the model that will ACTUALLY be loaded, not the one configured — those differ
@@ -223,8 +251,8 @@ PROVIDERS = {
 
 # Best-first when we're just picking whatever works. On the free path we prefer the user's own
 # machine and their pool over a corporate cloud -- that is the whole thesis, expressed as an order.
-_ORDER_PAID = ["anthropic", "groq", "pool", "ollama"]
-_ORDER_FREE = ["ollama", "pool", "groq", "anthropic"]
+_ORDER_PAID = ["anthropic", "groq", "pool", "ollama", "genie-1"]
+_ORDER_FREE = ["ollama", "pool", "genie-1", "groq", "anthropic"]
 
 def available(env_files=()):
     """Which providers are actually reachable RIGHT NOW. Key presence for the keyed ones; a live
@@ -238,6 +266,8 @@ def available(env_files=()):
             # this table cheerfully says yes. Require a model we can actually load — the same
             # discipline as judging a crash loop by the pid rather than by the log.
             out[name] = bool(resolve_ollama_model())
+        elif name == "genie-1":
+            out[name] = os.environ.get("GENIE1_OFF") != "1"
         elif name == "pool":
             out[name] = bool(POOL_URL)
         else:

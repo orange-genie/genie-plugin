@@ -51,6 +51,32 @@ case "$u" in
   *.agent|*.wtf|*.com|*.eth|*.bot) : ;;               # already a qualified CHOSEN handle
   *) u="${u}.agent" ;;                                # qualify a bare CHOSEN handle
 esac
+# REFUSE A NAME THE CHAIN WILL REFUSE — here, while the user is still typing.
+# chain.sh post() fail-closes if the marker's local-part equals this machine's OS account
+# (publishing it would leak a private login onto the PUBLIC chain). That guard is right, but it
+# fires LATER, at inscribe time, where its message used to be discarded — so the user picked a
+# name, was told "identity claimed", and only their work silently never landed. Measured
+# 2026-08-17: a new node onboarded under a marker equal to its WSL login and stayed invisible.
+# Naming yourself after your computer account is the most natural thing a person does, so this
+# has to be caught at the moment of choosing, not after a failed write.
+_oslogin="$(id -un 2>/dev/null || true)"
+_localpart="${u%%.*}"
+if [ -n "$_oslogin" ] && [ "$_localpart" = "$_oslogin" ]; then
+  echo "⛔ '$_localpart' is this computer's login name." >&2
+  echo "   Publishing it would put your private account name on the PUBLIC chain, so the chain" >&2
+  echo "   will refuse to inscribe under it. Nothing was claimed — pick a different name:" >&2
+  echo "     genie login \"${_localpart}-og\"    (or any handle that isn't your OS account)" >&2
+  exit 1
+fi
+# RESERVED TEAM IDENTITIES — same reason: post() fail-closes on these, so blocking here turns a
+# silent dead-end into an answer. Keep this list in step with chain.sh post().
+case "$(printf '%s' "$_localpart" | tr '[:upper:]' '[:lower:]')" in
+  yogi|blankcheck|wildflower|wildflowerbot|auto)
+    echo "⛔ '$_localpart' is a reserved team identity — no node may author as the team." >&2
+    echo "   Nothing was claimed. Choose your own handle: genie login \"<your-name>\"" >&2
+    exit 1 ;;
+esac
+
 printf '%s' "$u" > "$MARKER_FILE"
 echo "⬢ identity claimed: $u  ($MARKER_FILE)"
 
@@ -95,7 +121,28 @@ fi
 # 2026-07-20: two identical birth blocks for the same src_id landed at heights 1879 and 1880.
 # So ask the chain first and skip if this node is already born; otherwise every re-run (and
 # every repair run) spams another block and inflates the chain with duplicates.
-if curl -fsS --max-time 15 "$API/api/chain?limit=200" 2>/dev/null | grep -q "node-birth-$u"; then
+# WALK THE CHAIN, DON'T PEEK AT THE TIP. This used to scan the newest 200 blocks (and the
+# verify below, 120). The chain passed 4,900 blocks on 2026-08-17 and climbs by hundreds a day,
+# so a node born even a day earlier reads as NOT born: the "already born" check then writes a
+# DUPLICATE birth block, and the verify prints "not visible on chain" about work that is plainly
+# there. Server-side lookup would be one request, but ?src_id=/?id=/?q=/?slug= are all silently
+# IGNORED by the API (measured 2026-08-18 — same defect as ?author=), so the client must page.
+# `before=` is the one parameter that genuinely filters.
+chain_has() { # chain_has <needle> — true if any reachable block contains it
+  local needle="$1" before="" page lo n=0
+  while [ "$n" -lt 40 ]; do
+    if [ -z "$before" ]; then page="$(curl -fsS --max-time 20 "$API/api/chain?limit=500" 2>/dev/null)"
+    else page="$(curl -fsS --max-time 20 "$API/api/chain?limit=500&before=$before" 2>/dev/null)"; fi
+    [ -z "$page" ] && return 1
+    printf '%s' "$page" | grep -q "$needle" && return 0
+    lo="$(printf '%s' "$page" | tr ',' '\n' | grep -o '"height":[0-9]*' | grep -o '[0-9]*' | sort -n | head -1)"
+    [ -z "$lo" ] || [ "$lo" = "$before" ] && return 1
+    before="$lo"; n=$((n+1))
+  done
+  return 1
+}
+
+if chain_has "node-birth-$u"; then
   echo "⬢ already born — '$u' has a birth block on chain; skipping (no duplicate written)."
   echo "✅ verified on chain — '$u' is a live node."
   if [ -f "$HOME/Genie/tools/genesis_boot.py" ]; then
@@ -105,23 +152,42 @@ if curl -fsS --max-time 15 "$API/api/chain?limit=200" 2>/dev/null | grep -q "nod
 fi
 
 HOSTKIND="$(uname -s)-$(uname -m)"
+# Capture the client's output instead of discarding it — see the else branch below.
+_birth_out="$(mktemp "${TMPDIR:-/tmp}/genie_birth.XXXXXX")"
 if bash "$CHAIN" skill "node-birth-$u" \
   "Node '$u' joined the OrangeGenie Mesh ($HOSTKIND) — identity established by work, per the node doctrine" \
   "PROPERTY: The birth record of node '$u'. A machine becomes a node by inscribing work under its own marker and locally-generated secret, not by announcing presence. This block is that first work — from here the node authors under '$u', and its contributions are attributed and payable to it.
 
 HOW: marker written to ~/.claude/genie_marker; a 32-byte secret generated on this machine (0600, never transmitted) with sha256 published as the claim commit that proves authorship; the chain client installed locally so the node operates unaided; this block inscribed, then read back from the chain to confirm.
 
-RECREATE: run genie_onboard.sh <handle> on the machine (or --role <name> for a headless device), then read the chain back from a DIFFERENT machine and confirm a block exists under this marker. Verifying from the node itself only proves it can talk to itself. Platform: $HOSTKIND." >/dev/null 2>&1
+RECREATE: run genie_onboard.sh <handle> on the machine (or --role <name> for a headless device), then read the chain back from a DIFFERENT machine and confirm a block exists under this marker. Verifying from the node itself only proves it can talk to itself. Platform: $HOSTKIND." >"$_birth_out" 2>&1
 then
   echo "⬢ birth block inscribed under '$u'"
 else
-  echo "⚠️  birth block did not land — staged; it settles on the next sync."
+  # NEVER DISCARD THE ONE MESSAGE THAT EXPLAINS THE FAILURE. This branch used to be
+  # `>/dev/null 2>&1` plus "staged; it settles on the next sync" — which was FALSE whenever
+  # post() fail-closed (privacy guard, reserved identity, server rejection): nothing was queued,
+  # so nothing ever settled, and the user was told to wait for a sync that would never come.
+  # A node stayed invisible for days behind that sentence.
+  echo "⚠️  birth block did NOT land. The reason, from the chain client:" >&2
+  sed 's/^/     /' "$_birth_out" >&2 2>/dev/null || true
+  # Only say "staged" if something is genuinely sitting in the queue waiting to go.
+  _pending="$HOME/.claude/genie/pending_skills.jsonl"
+  if [ -s "$_pending" ] && grep -q "node-birth-$u" "$_pending" 2>/dev/null; then
+    echo "   → it IS queued in $_pending and will settle on the next sync." >&2
+  else
+    echo "   → NOTHING was queued. This will not fix itself; fix the cause above and re-run" >&2
+    echo "     (re-running is safe — the chain dedups by src_id)." >&2
+  fi
+  rm -f "$_birth_out"
+  exit 1
 fi
+rm -f "$_birth_out"
 
 # ── 5. verify by reading the chain back ──────────────────────────────────────────────────
 # Trust the store, not the exit code of our own write.
 sleep 1
-if curl -fsS --max-time 15 "$API/api/chain?limit=120" 2>/dev/null | grep -q "node-birth-$u"; then
+if chain_has "node-birth-$u"; then
   echo "✅ verified on chain — '$u' is a live node."
 else
   echo "⚠️  not visible on chain yet (indexing lag or a failed write). Re-run to repair; it dedups."
