@@ -117,10 +117,30 @@ def cmd_ask(question):
         print(f"{DIM}[not grounded — the chain had nothing on this yet]{RESET}")
 
 
+def _chain_runner():
+    """Pick how to reach the chain: bash where there IS bash, pure Python where there isn't.
+
+    Native Windows has no bash, so `bash chain.sh` failed there — which meant a Windows user
+    could install the CLI and ask questions (brain.py is stdlib-only) but could never claim a
+    name or search the chain. WSL was the workaround and it is not a product.
+
+    bash stays FIRST on every machine that has it: chain.sh is the proven implementation and
+    the Stop hook depends on it, so Mac/Linux behaviour is unchanged. chain.py is a second
+    client of the same HTTP API for the machines bash never reaches.
+    """
+    if shutil.which("bash") and os.path.exists(CHAIN):
+        return ["bash", CHAIN]
+    py = os.path.join(HERE, "chain.py")
+    if os.path.exists(py):
+        return [sys.executable, py]
+    return None
+
+
 def cmd_chain(args):
-    if not os.path.exists(CHAIN):
-        die("✗ chain.sh is missing next to this script. Run: genie update")
-    sys.exit(subprocess.call(["bash", CHAIN] + args))
+    runner = _chain_runner()
+    if not runner:
+        die("✗ chain.sh / chain.py are missing next to this script. Run: genie update")
+    sys.exit(subprocess.call(runner + args))
 
 
 def cmd_providers():
@@ -178,28 +198,47 @@ def cmd_login(args):
     identity here is established by WORK rather than by a presence ping. Nothing is broadcast;
     nobody can see when you are online.
     """
-    onboard = os.path.join(HERE, "genie_onboard.sh")
-    if not os.path.exists(onboard):
-        die("✗ genie_onboard.sh is missing next to this script. Run: genie update")
     if not args:
         die('usage: genie login "<the name you want on the network>"\n'
             "  This is your identity: every skill you contribute and every payout resolves to it.")
-    sys.exit(subprocess.call(["bash", onboard] + args))
+    onboard = os.path.join(HERE, "genie_onboard.sh")
+    if shutil.which("bash") and os.path.exists(onboard):
+        sys.exit(subprocess.call(["bash", onboard] + args))
+    # No bash (native Windows). chain.py writes the marker and applies the same two
+    # fail-closed guards — OS-login-as-marker and reserved team identities.
+    runner = _chain_runner()
+    if not runner:
+        die("✗ genie_onboard.sh / chain.py are missing next to this script. Run: genie update")
+    sys.exit(subprocess.call(runner + ["login"] + args))
 
 
 def cmd_update():
     """Re-fetch the shared parts. They live in the public plugin repo, so a fix there lands here."""
-    files = [("plugins/genie/tools/brain.py", "brain.py"),
+    # `cli/genie` MUST be in this list. It was not, so every fix to the command itself — the
+    # argument parsing, the login path, this updater — was unreachable by anyone who had
+    # already installed. They updated, saw ✓ on every line, and kept running the old command.
+    # A self-updater that cannot update itself is the one bug that hides all the others.
+    files = [("cli/genie", "genie"),
+             ("plugins/genie/tools/brain.py", "brain.py"),
+             ("plugins/genie/tools/chain.py", "chain.py"),
              ("plugins/genie/tools/chain.sh", "chain.sh"),
              ("plugins/genie/tools/genie_llm.py", "genie_llm.py"),
              ("plugins/genie/tools/genie_onboard.sh", "genie_onboard.sh"),
              ("plugins/genie/skills/wake/canon.md", "canon.md")]
     for remote, local in files:
         dest = os.path.join(HERE, local)
-        rc = subprocess.call(["curl", "-fsSL", f"{REPO_RAW}/{remote}", "-o", dest])
+        # Download to a temp path and move into place. Writing straight over `genie` while it
+        # is the file being executed is how you end up with a half-written command and a user
+        # who cannot even run `genie update` to recover.
+        tmp = dest + ".new"
+        rc = subprocess.call(["curl", "-fsSL", f"{REPO_RAW}/{remote}", "-o", tmp])
+        if rc == 0:
+            if local.endswith((".sh",)) or local == "genie":
+                os.chmod(tmp, 0o755)
+            os.replace(tmp, dest)
+        elif os.path.exists(tmp):
+            os.remove(tmp)
         print(f"  {'✓' if rc == 0 else '✗'} {local}")
-        if rc == 0 and local.endswith(".sh"):
-            os.chmod(dest, 0o755)
     print("⬢ up to date.")
 
 

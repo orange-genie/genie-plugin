@@ -39,6 +39,7 @@ for pair in \
   "cli/genie:genie" \
   "plugins/genie/tools/brain.py:brain.py" \
   "plugins/genie/tools/chain.sh:chain.sh" \
+  "plugins/genie/tools/chain.py:chain.py" \
   "plugins/genie/tools/genie_llm.py:genie_llm.py" \
   "plugins/genie/tools/genie_onboard.sh:genie_onboard.sh" \
   "plugins/genie/skills/wake/canon.md:canon.md"
