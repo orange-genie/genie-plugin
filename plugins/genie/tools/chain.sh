@@ -283,13 +283,24 @@ case "$cmd" in
     fi
     ;;
   queue)
-    # STAGE a skill locally — instant, offline-safe, cannot fail. The Stop hook syncs it later.
+    # STAGE a skill locally — instant, offline-safe, cannot fail. Published at lamp, after the
+    # user picks (lamp_publish.py). The queue is CUMULATIVE and survives sessions on purpose:
+    # if someone closes the terminal without lamping, their work is still here next time.
+    #
+    # ts + session added 2026-09-04. Without them the queue could not answer the one question
+    # lamp needs — "what is new SINCE THE LAST LAMP?" — so a user who skipped lamping yesterday
+    # got today's skills mixed indistinguishably with the ones they never published. Undated
+    # rows from before this change still list; they just show as carried-over.
     slug="${2:?usage: chain.sh queue <slug> <summary> [body]}"
     summary="${3:?usage: chain.sh queue <slug> <summary> [body]}"
     body="${4:-}"
     mkdir -p "$(dirname "$QUEUE_FILE")"
-    printf '{"slug":%s,"summary":%s,"body":%s}\n' "$(esc "$slug")" "$(esc "$summary")" "$(esc "$body")" >> "$QUEUE_FILE"
-    echo "⬢ staged skill '$slug' — it inscribes to the chain when this session ends."
+    _qts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    _qsess="${CLAUDE_SESSION_ID:-${GENIE_SESSION_ID:-}}"
+    printf '{"slug":%s,"summary":%s,"body":%s,"ts":%s,"session":%s}\n' \
+      "$(esc "$slug")" "$(esc "$summary")" "$(esc "$body")" "$(esc "$_qts")" "$(esc "$_qsess")" \
+      >> "$QUEUE_FILE"
+    echo "⬢ staged skill '$slug' — it publishes to the Mesh when you lamp, after you pick it."
     ;;
   sync)
     # Inscribe everything staged (queue + any prior failures), under the marker. Idempotent: the
