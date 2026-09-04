@@ -48,6 +48,10 @@ RECEIPT_FILE="$HOME/.claude/genie/inscribed.log"        # what actually landed (
 # minute is retrievable on the next call. Inscribe -> mirror -> index -> answer. Loop closed.
 MIRROR_FILE="$HOME/.claude/genie/chain_skills.jsonl"    # local mirror of what THIS node inscribed
 SYNC_CAP="${GENIE_SYNC_CAP:-5}"                        # max skills inscribed per sync (keeps the Stop hook bounded)
+LOCAL_INSCRIBE="${GENIE_LOCAL_INSCRIBE:-$HOME/Genie/tools/local_inscribe.py}"   # local-first writer
+SYNC_GAP="${GENIE_SYNC_GAP:-2}"                        # seconds between inscriptions — see sync): the server
+                                                       # rate-limits a burst, and an unpaced retry re-bursts the
+                                                       # SAME queue into the SAME limit on every run, forever.
 
 # Marker resolution, most-specific first. The global file is ONE per machine, so it alone
 # cannot run two project genies side by side — $GENIE_MARKER and ./.genie_marker give each
@@ -187,6 +191,19 @@ post() { # post <src_id> <type> <symbol> <summary> <body> [data_json]
   rm -f "$_cerr"
   case "$_code" in
     2*) printf '%s' "$_body"; return 0 ;;
+    # TRANSIENT, NOT A REJECTION — chain skill `cursor-safety-skip-only-malformed-data`:
+    # retry infrastructure errors, only skip genuine data errors. 429 (rate limit) and 5xx
+    # (server/DB down) are the server saying "not now", not "never", so they belong in the
+    # retry class (2) and NOT in rejected_writes.log, which is meant to be a list of things a
+    # human must go fix. Filing them there buried the one real 400 under 300 rate-limit lines.
+    # NOTE the stranding itself was never a classification bug — failures were requeued the
+    # whole time. See sync): the queue re-burst into the same rate limit on every run.
+    429|50[0234])
+        echo "⏳ chain BUSY (HTTP $_code) — staged for retry; this class does fix itself." >&2
+        mkdir -p "$HOME/.claude/genie"
+        printf '%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$_code" "$mk" "$sid :: transient, requeued" \
+          >> "$HOME/.claude/genie/deferred_writes.log"
+        return 2 ;;
     *)  local _err
         _err="$(printf '%s' "$_body" | $PY -c 'import json,sys
 try: print(json.load(sys.stdin).get("error","(no error field)"))
@@ -284,15 +301,54 @@ case "$cmd" in
     src_lines="$(printf '%s\n' "$src_lines" | grep -v '^[[:space:]]*$' || true)"
     [ -z "$src_lines" ] && exit 0     # nothing staged → silent no-op (no noise on trivial sessions)
     : > "$RETRY_FILE"                 # rebuild retry from this run's failures only
-    ok=0; fail=0; n=0
+    ok=0; fail=0; n=0; busy=0
     while IFS= read -r line; do
       [ -z "$line" ] && continue
-      n=$((n+1)); [ "$n" -gt "$SYNC_CAP" ] && { printf '%s\n' "$line" >> "$RETRY_FILE"; continue; }
+      n=$((n+1))
+      # Over cap, or the server already said "not now" this run: preserve, do not post.
+      # NEVER break out of this loop — QUEUE_FILE is truncated below, so an unread line is a
+      # lost skill. Writing the remainder out to RETRY_FILE is what makes stopping early safe.
+      if [ "$busy" = 1 ] || [ "$n" -gt "$SYNC_CAP" ]; then
+        printf '%s\n' "$line" >> "$RETRY_FILE"; continue
+      fi
       slug="$(printf '%s' "$line" | $PY -c 'import json,sys; print(json.load(sys.stdin).get("slug",""))' 2>/dev/null)"
       summary="$(printf '%s' "$line" | $PY -c 'import json,sys; print(json.load(sys.stdin).get("summary",""))' 2>/dev/null)"
       body="$(printf '%s' "$line" | $PY -c 'import json,sys; print(json.load(sys.stdin).get("body",""))' 2>/dev/null)"
       [ -z "$slug" ] && continue
-      if out="$(post "skill.$slug" "SKILL" "⬢" "$summary" "$body")"; then
+      # PACE. Unpaced back-to-back POSTs trip the server's rate limit, and the retry then throws
+      # the same queue at the same limit next run — which is how 60 skills sat off-chain for
+      # nine days while the log said "kept for retry" every single time. Gap before every write
+      # except the first, so a one-skill session stays instant.
+      # LOCAL FIRST. `local_inscribe.py` appends to the hash-linked chain on disk — which cannot
+      # fail for network reasons — and only then offers the same block to the hosted replica.
+      #
+      # THE FAILURE THIS ENDS (2026-08-31): for nine days every write here went straight at one
+      # hosted origin, that origin 522'd, and 64 skills sat in a retry file while every report
+      # said "the chain is down". It was not. genesis.skills.json held 14,333 hash-linked blocks
+      # the whole time. We had been calling the mirror the chain and the chain a local file, so a
+      # single unreachable host could stop Genie remembering anything at all.
+      #
+      # This does NOT decide which store is authoritative — see ~/Genie/CLAUDE.md, that is AUTO's
+      # call. It decides only that a write can no longer be BLOCKED or LOST by someone else's box.
+      if [ -f "$LOCAL_INSCRIBE" ]; then
+        rc=0; out="$(printf '%s\n' "$line" | $PY "$LOCAL_INSCRIBE" 2>/dev/null)" || rc=$?
+        if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '"ok": *true'; then
+          ok=$((ok+1))
+          printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$slug" "$out" >> "$RECEIPT_FILE"
+          printf '%s\n' "$line" >> "$MIRROR_FILE"
+        else
+          fail=$((fail+1)); printf '%s\n' "$line" >> "$RETRY_FILE"
+        fi
+        continue
+      fi
+
+      # Fallback: remote-only, the old path. Reached only if the local writer is missing.
+      if [ $((ok+fail)) -gt 0 ]; then sleep "$SYNC_GAP"; fi
+      # `set -e` is on: a bare `out=$(post ...)` assignment carries post's exit status, so the
+      # first failed write would kill the whole sync and abandon the queue. The `|| rc=$?` form
+      # is what makes the status readable instead of fatal.
+      rc=0; out="$(post "skill.$slug" "SKILL" "⬢" "$summary" "$body")" || rc=$?
+      if [ "$rc" = 0 ]; then
         ok=$((ok+1))
         printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$slug" "$(printf '%s' "$out" | grep -o '"height":[0-9]*' | head -1)" >> "$RECEIPT_FILE"
         # mirror it while we still hold the body — this is what makes the new skill RETRIEVABLE.
@@ -300,6 +356,9 @@ case "$cmd" in
         printf '%s\n' "$line" >> "$MIRROR_FILE"
       else
         fail=$((fail+1)); printf '%s\n' "$line" >> "$RETRY_FILE"
+        # rc=2 is the server saying "not now" (rate limit / DB down). Posting the rest of the
+        # queue into a closed door only deepens the limit and re-fails work that was fine.
+        if [ "$rc" = 2 ]; then busy=1; fi
       fi
     done <<EOF
 $src_lines
@@ -854,24 +913,67 @@ else:
     ;;
 
   health)
-    # RECONCILIATION TRIPWIRE — the guardrail that makes a silent inscribe-backlog impossible.
-    # Reads receipts vs the queues and answers ONE question: is our work actually settling to chain?
-    # Wired into session start (greet) so the moment writes fail, the next wake SCREAMS the real reason
-    # instead of it piling up unseen (how 3,581 skills got stranded). Exit 0 = clean, 1 = alarm.
-    q=0; r=0; rej=0
+    # RECONCILIATION TRIPWIRE — is our work actually settling to chain? Exit 0 = clean, 1 = alarm.
+    # Wired into session start so a write backlog can never pile up unseen (how 3,581 got stranded).
+    #
+    # A TOTAL CANNOT MEASURE A LIVE FAILURE — A FAILURE IS A RATE. (fixed 2026-09-04)
+    # This used to be `rej=$(grep -c . "$REJLOG")`: every line ever written, for all time. One 429
+    # burst on 2026-08-24 put 300 lines in that file, so from then on EVERY session start printed
+    # "301 REJECTED - work is NOT settling" at a chain that was settling perfectly, both queues
+    # empty. That is Standing Order 11 (a working system never renders red) broken in the SHIPPED
+    # plugin - in every user's terminal - our own monitor FUDding our own house. Two bugs, both fixed:
+    #   1. WINDOW - count only the last $REJ_WINDOW_DAYS days, never the lifetime.
+    #   2. CLASS  - 429/5xx are the server saying "not now", not "never". post() already classifies
+    #               them as retry (return 2) into deferred_writes.log; the lines sitting in REJLOG
+    #               predate that fix. Only a genuine 4xx is a bug a human must go fix.
+    # Red is reserved for what a human must act on. Everything else reads as calm status.
+    REJ_WINDOW_DAYS="${GENIE_REJ_WINDOW_DAYS:-7}"
+    q=0; r=0; rej=0; transient=0; rej_latest=""
     [ -s "$QUEUE_FILE" ] && q=$(grep -c . "$QUEUE_FILE" 2>/dev/null || echo 0)
     [ -s "$RETRY_FILE" ] && r=$(grep -c . "$RETRY_FILE" 2>/dev/null || echo 0)
     REJLOG="$HOME/.claude/genie/rejected_writes.log"
-    [ -s "$REJLOG" ] && rej=$(grep -c . "$REJLOG" 2>/dev/null || echo 0)
-    last="$(tail -1 "$RECEIPT_FILE" 2>/dev/null | cut -f1)"
+    if [ -s "$REJLOG" ]; then
+      _counts="$($PY -c '
+import sys, datetime
+path, days = sys.argv[1], int(sys.argv[2])
+cutoff = (datetime.datetime.now(datetime.timezone.utc)
+          - datetime.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+TRANSIENT = {"429", "500", "502", "503", "504"}
+real = trans = 0
+latest = ""
+for line in open(path, encoding="utf-8", errors="replace"):
+    parts = line.rstrip("\n").split("\t")
+    if len(parts) < 2:
+        continue
+    ts, code = parts[0], parts[1].strip()
+    if ts < cutoff:
+        continue
+    if code in TRANSIENT:
+        trans += 1
+    else:
+        real += 1
+        latest = code + ("\t" + parts[3] if len(parts) > 3 else "")
+print(real); print(trans); print(latest)
+' "$REJLOG" "$REJ_WINDOW_DAYS" 2>/dev/null)"
+      rej=$(printf '%s' "$_counts" | sed -n 1p); rej="${rej:-0}"
+      transient=$(printf '%s' "$_counts" | sed -n 2p); transient="${transient:-0}"
+      rej_latest=$(printf '%s' "$_counts" | sed -n 3p)
+    fi
+    # `|| true`: set -euo pipefail makes a failing pipeline kill the script, and on a FRESH
+    # INSTALL there is no inscribed.log yet — so this line silently exited health at session
+    # start for exactly the users who most need it to work. A missing receipt file is "none".
+    last="$(tail -1 "$RECEIPT_FILE" 2>/dev/null | cut -f1 || true)"
     if [ "$q" = 0 ] && [ "$r" = 0 ] && [ "$rej" = 0 ]; then
       echo "⬢ chain health: clean — nothing stuck. last inscribe: ${last:-none}"
+      # A throttle that was requeued and landed IS the system working. Plain status, never red.
+      [ "${transient:-0}" -gt 0 ] && \
+        echo "   ($transient transient retry/throttle event(s) in the last ${REJ_WINDOW_DAYS}d — already handled.)"
       exit 0
     fi
     echo "⛔ CHAIN HEALTH ALARM — work is NOT fully settling to the chain:"
     [ "$q"   -gt 0 ] && echo "   • $q staged (queued, not yet synced) → chain.sh sync"
     [ "$r"   -gt 0 ] && echo "   • $r unreachable-retry (network — will land when back online)"
-    [ "$rej" -gt 0 ] && echo "   • $rej REJECTED (a bug, retry will NOT help) — latest: $(tail -1 "$REJLOG" 2>/dev/null | cut -f2,4)"
+    [ "$rej" -gt 0 ] && echo "   • $rej REJECTED in the last ${REJ_WINDOW_DAYS}d (a bug, retry will NOT help) — latest: $rej_latest"
     echo "   → fix any REJECTED reason at the source, then: chain.sh sync"
     exit 1
     ;;
