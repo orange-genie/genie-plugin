@@ -39,9 +39,12 @@ jobs:
             args: ""
     runs-on: ${{ matrix.os }}
     steps:
+      # BUILD FROM THE BRANCH, UPLOAD TO THE TAG. The first run checked out the tag it was
+      # asked to attach to — and that tag was cut BEFORE the app source existed, so every job
+      # died with "working directory app/tauri: no such file or directory" on all three
+      # platforms at once. A release tag names where the artifacts GO; it is not necessarily
+      # where the code to build them lives. On a tag push these are the same commit anyway.
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Linux build dependencies
         if: matrix.os == 'ubuntu-22.04'
