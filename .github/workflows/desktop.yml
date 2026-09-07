@@ -72,17 +72,28 @@ jobs:
       # Collected by extension rather than by exact filename: Tauri's bundle names carry the
       # version and the arch, so a hardcoded path silently stops matching on the next bump and
       # the upload step finds nothing while still reporting success.
+      # COLLECT FROM THE BUNDLE DIRECTORY ONLY.
+      # The first successful run searched the whole target tree for *.exe and attached FORTY-FIVE
+      # files to the release: every Rust build-script intermediate under target/release/build/,
+      # plus the bare genie1.exe, which is the binary and not something anyone can install.
+      # Excluding */deps/* was not enough, because build scripts do not live in deps.
+      #
+      # Tauri writes what it BUNDLES to one place. Take it from there and the question of what
+      # counts as an installer stops being a guess about filenames.
       - name: Collect installers
         shell: bash
         run: |
           mkdir -p out
-          find app/tauri/target -type f \
-            \( -name "*.dmg" -o -name "*.msi" -o -name "*.exe" \
+          find app/tauri/target -type f -path "*/release/bundle/*" \
+            \( -name "*.dmg" -o -name "*.msi" -o -name "*-setup.exe" \
                -o -name "*.AppImage" -o -name "*.deb" \) \
-            -not -path "*/deps/*" -print0 | while IFS= read -r -d '' f; do
+            -print0 | while IFS= read -r -d '' f; do
               cp "$f" out/
             done
           ls -lh out
+          # An empty out/ means the bundle path changed. Fail here rather than let the upload
+          # step report success on nothing.
+          [ "$(ls -A out)" ] || { echo "no installers found under */release/bundle/"; exit 1; }
 
       - name: Attach to the release
         uses: softprops/action-gh-release@v2
