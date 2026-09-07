@@ -1,0 +1,2148 @@
+<!doctype html>
+<html data-app="1" lang="en">
+<head>
+<script>
+(function () {
+  var core = window.__TAURI__ && window.__TAURI__.core;
+  var orig = window.fetch ? window.fetch.bind(window) : null;
+
+  // Header objects reach fetch in three shapes and all three are used on this page.
+  function flat(h) {
+    var out = {};
+    if (!h) return out;
+    if (typeof Headers !== "undefined" && h instanceof Headers) {
+      h.forEach(function (v, k) { out[k] = v; });
+    } else if (Array.isArray(h)) {
+      h.forEach(function (p) { out[p[0]] = p[1]; });
+    } else {
+      Object.keys(h).forEach(function (k) { out[k] = h[k]; });
+    }
+    return out;
+  }
+
+  window.fetch = function (input, init) {
+    var url = (typeof input === "string") ? input : (input && input.url) || "";
+    if (url.indexOf("/api/") !== 0 || !core || !core.invoke) {
+      return orig ? orig(input, init) : Promise.reject(new Error("no fetch"));
+    }
+    init = init || {};
+    return core.invoke("api_fetch", {
+      path: url,
+      method: (init.method || "GET").toUpperCase(),
+      body: (typeof init.body === "string") ? init.body : null,
+      headers: flat(init.headers)
+    }).then(function (r) {
+      return new Response(r.body, {
+        status: r.status,
+        headers: { "content-type": r.content_type || "application/json" }
+      });
+    }).catch(function (e) {
+      // A refusal from the shim must look like a failed request, not a thrown page.
+      return new Response(JSON.stringify({ ok: false, error: String(e) }),
+                          { status: 502, headers: { "content-type": "application/json" } });
+    });
+  };
+})();
+</script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap" rel="stylesheet">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ask Genie</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+/* Tokens from ~/Genie/brand/tokens.json. Black and orange is the signature.
+   Blue is the only cool note. No emojis — standing order, real marks only. */
+:root{
+  --bg:#0a0a0a; --ground:#08080a; --line:#1c1c20; --line2:#262626;
+  --orange:#f76b00; --orangeHi:#ff8a1e; --warm:#ffc27a; --dim:#8a3d00;
+  --green:#8fe814;
+  /* THE READING GREEN. #8fe814 is a signal colour — it is right for a four-letter kicker and
+     wrong for six paragraphs of body text, where at full chroma it vibrates against the black
+     and the eye starts fighting the page instead of reading it. Same hue, taken down in
+     saturation and lightness so a long answer stays comfortable; the loud green stays for the
+     small accents that are meant to be spotted rather than read. */
+  --greenInk:#a7c47a;
+  --blue:#6b9fff; --text:#f2f2f2; --muted:#8a8a8a; --faint:#5f5f66;
+  --sans:Inter,system-ui,-apple-system,sans-serif;   /* UI, body, numbers */
+  --mono:'Space Mono',ui-monospace,monospace;        /* uppercase labels only */
+  --display:Inter,system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg);color:var(--text);
+          font-family:var(--sans);font-size:14px}
+/* One viewport. Nothing here is a scroll target except the three columns,
+   which scroll inside themselves. */
+body{display:flex;flex-direction:column;overflow:hidden}
+button,input{font-family:var(--sans);font-size:14px}
+::selection{background:var(--dim);color:#fff}
+
+header{flex:none;display:flex;align-items:baseline;gap:20px;padding:13px 26px;
+       border-bottom:1px solid var(--line)}
+.mark{font-family:var(--display);font-weight:700;font-size:19px;letter-spacing:-0.2px;line-height:1}
+.mark i{font-style:normal;color:var(--orange)}
+.tag{font-family:var(--mono);font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--faint)}
+.tag b{color:var(--muted);font-weight:400}
+
+main{flex:1;min-height:0;display:grid;
+     grid-template-columns:264px minmax(0,1fr) 296px}
+.pane{min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.pane.hist{border-right:1px solid var(--line)}
+.pane.face{border-left:1px solid var(--line)}
+.pane>.body{flex:1;min-height:0;overflow-y:auto;padding:16px 18px}
+h2{font-family:var(--mono);font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--faint);
+   padding:14px 18px 0;flex:none}
+
+/* ── left: what this Face has been taught ───────────────────────────── */
+.hitem{border-left:2px solid var(--line2);padding:7px 0 7px 11px;margin-bottom:11px;
+       cursor:pointer}
+.hitem:hover{border-left-color:var(--muted)}
+.hitem.minted{border-left-color:var(--orange)}
+.hitem .q{font-size:12px;line-height:1.45;color:var(--muted);
+          display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.hitem .s{font-family:var(--mono);font-size:10px;letter-spacing:2px;text-transform:uppercase;
+          color:var(--faint);margin-top:4px}
+.hitem.minted .s{color:var(--orange)}
+.empty{font-size:12px;line-height:1.6;color:var(--faint)}
+
+/* ── centre: the conversation ───────────────────────────────────────── */
+.pane.chat>.body{padding:18px 26px}
+.line{line-height:1.6;max-width:74ch;margin-bottom:13px}
+.line.you{color:var(--muted)}
+.line.you::before{font-family:var(--mono);content:'you  ';color:var(--faint);font-size:11px;letter-spacing:2px}
+.line.face{color:var(--greenInk)}
+.line.sys{color:var(--faint);font-size:12px;line-height:1.55}
+.line.sys.mint{color:var(--orange)}
+.ask{flex:none;display:flex;gap:10px;padding:14px 26px 18px;
+     border-top:1px solid var(--line)}
+.ask input{flex:1;background:var(--ground);border:1px solid var(--line2);border-radius:10px;
+           color:var(--text);padding:12px 14px;outline:none}
+.ask input:focus{border-color:var(--dim)}
+/* SEND and the wallet door are the same kind of thing — the one filled control in their half
+   of the screen — so they are the same button. SEND was black-on-orange while the wallet button
+   was white-on-orange, which reads as two different systems on one screen rather than one. */
+.go{font-family:var(--mono);background:var(--orange);border:1px solid var(--orange);
+    border-radius:10px;color:#fff;font-weight:600;padding:12px 24px;
+    cursor:pointer;text-transform:uppercase;letter-spacing:2px;font-size:11px}
+.go:hover{background:var(--orangeHi);border-color:var(--orangeHi)}
+.go:disabled{background:#1a1a1e;color:var(--faint);cursor:default}
+
+/* ── right: the Face ────────────────────────────────────────────────── */
+/* The canonical OG screen — scanlines, vignette, orange bloom. Lifted verbatim
+   from og-brand/genie-live.html by way of royalty/build_wildflower.py. This is
+   the signature CRT surface; it is not restyled per page. */
+.screen{position:relative;width:100%;max-width:210px;aspect-ratio:1/1;
+  overflow:hidden;border-radius:18px;
+  background:radial-gradient(140% 140% at 50% 28%,#181513,#0a0a0c 72%);
+  border:1px solid var(--line2);
+  box-shadow:0 0 70px -26px rgba(247,107,0,.42),inset 0 0 70px rgba(0,0,0,.7)}
+.screen::before{content:"";position:absolute;inset:0;border-radius:18px;pointer-events:none;z-index:3;
+  background:repeating-linear-gradient(0deg,rgba(247,107,0,.05) 0 1px,transparent 1px 3px)}
+.screen::after{content:"";position:absolute;inset:0;border-radius:18px;pointer-events:none;z-index:3;
+  box-shadow:inset 0 0 90px rgba(0,0,0,.55)}
+#genieCanvas{position:absolute;inset:0;width:100%;height:100%;z-index:1}
+.slug{font-family:var(--mono);position:absolute;top:11px;left:13px;z-index:4;font-size:9px;letter-spacing:2px;
+      color:var(--orange);display:flex;align-items:center;gap:7px}
+.slug .dot{width:5px;height:5px;border-radius:50%;background:var(--orange);
+           box-shadow:0 0 9px var(--orange);animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.4;transform:scale(.85)}50%{opacity:1;transform:scale(1)}}
+@media(prefers-reduced-motion:reduce){.slug .dot{animation:none;opacity:.9}}
+.step{position:absolute;top:9px;right:9px;z-index:4;display:flex;gap:4px}
+.step button{background:rgba(0,0,0,.55);border:1px solid var(--line2);color:var(--muted);
+             width:26px;height:26px;border-radius:7px;cursor:pointer;line-height:1;font-size:12px}
+.step button:hover{color:var(--orange);border-color:var(--dim)}
+.step button:focus-visible{outline:2px solid var(--orange);outline-offset:2px}
+
+.no{font-family:var(--display);font-weight:700;font-size:30px;line-height:1;
+    letter-spacing:-1px;margin:14px 0 10px}
+.spec{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);
+      border:1px solid var(--line)}
+.spec>div{background:var(--bg);padding:7px 10px}
+.spec dt{font-family:var(--mono);font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--faint)}
+.spec dd{margin-top:3px;font-size:13px}
+.spec dd em{font-style:normal;color:var(--faint);margin-left:5px;font-size:11px}
+
+.wbtn.primary{background:#fff;color:#1f1f22;border-color:#fff;font-weight:600;
+  display:flex;align-items:center;justify-content:center;gap:8px}
+.wbtn.primary:hover{background:#ececf0;border-color:#ececf0}
+.wbtn + .wbtn{margin-top:7px}
+/* Google's mark, inline. A hotlinked logo is a third party watching every page view, and an
+   emoji is not their mark at all. */
+.gmark{width:15px;height:15px;flex:none;background-repeat:no-repeat;background-size:contain;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath fill='%23FFC107' d='M43.6 20.5h-1.9V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 13 4 4 13 4 24s9 20 20 20 20-9 20-20c0-1.3-.1-2.4-.4-3.5z'/%3E%3Cpath fill='%23FF3D00' d='M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z'/%3E%3Cpath fill='%234CAF50' d='M24 44c5.2 0 9.8-2 13.3-5.2l-6.2-5.2C29.1 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z'/%3E%3Cpath fill='%231976D2' d='M43.6 20.5h-1.9V20H24v8h11.3c-.8 2.2-2.2 4.2-4.2 5.6l6.2 5.2C36.9 40.2 44 35 44 24c0-1.3-.1-2.4-.4-3.5z'/%3E%3C/svg%3E")}
+.wmail{display:grid;gap:7px;margin:0 0 2px}
+.wkick{margin:0 0 1px;font-family:var(--mono);font-size:9.5px;letter-spacing:2px;
+  text-transform:uppercase;color:var(--faint)}
+/* the two doors are the same object at the same weight — only the emphasis differs */
+.wor{display:flex;align-items:center;gap:9px;margin:11px 0}
+.wor::before,.wor::after{content:"";flex:1;height:1px;background:var(--line)}
+.wor span{font-family:var(--mono);font-size:9.5px;letter-spacing:1.5px;color:var(--faint)}
+.wmail input{width:100%;padding:8px 10px;background:#0e0e11;border:1px solid var(--line);
+  border-radius:8px;color:var(--text);font-family:var(--sans);font-size:12.5px;outline:none;
+  box-sizing:border-box}
+.wmail input:focus{border-color:#333}
+.wmail input::placeholder{color:var(--faint)}
+.wmail button{width:100%;padding:10px 11px;background:#141418;border:1px solid var(--line2);
+  border-radius:8px;color:var(--text);font-family:var(--mono);font-size:10.5px;letter-spacing:1.4px;
+  text-transform:uppercase;cursor:pointer;box-sizing:border-box}
+.wmail button:hover{border-color:var(--orange);color:var(--orange)}
+.wmail button:disabled{color:var(--faint);border-color:var(--line);background:transparent;cursor:default}
+.wmsg{margin:2px 0 0;font-size:10.5px;line-height:1.4;color:var(--faint)}
+.wnote{margin:9px 2px 0;font-size:10.5px;line-height:1.45;color:var(--faint)}
+.rail{border-top:1px solid var(--line);margin-top:16px;padding-top:14px}
+#nftAgent{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+.agname{font-family:var(--mono);font-size:10px;letter-spacing:.4px;padding:3px 7px;
+  border:1px solid var(--line2);border-radius:999px;color:var(--muted);background:#111114}
+.agname.primary{color:var(--orange);border-color:#4a2a12}
+.agname.add{cursor:pointer}
+.agname.add:hover{border-color:var(--orange);color:var(--orange)}
+.packs{display:grid;gap:6px;margin:10px 0 12px}
+.pack{display:block;padding:9px 11px;border:1px solid var(--line);border-radius:9px;
+  background:#111114;text-decoration:none;transition:border-color .15s,background .15s}
+.pack:hover{background:#141418;border-color:#2a2a31}
+.pack b{display:block;font-size:12.5px;font-weight:600;color:var(--text);margin-bottom:2px}
+.pack span{display:block;font-size:11px;line-height:1.45;color:var(--faint)}
+.rail h3{font-family:var(--mono);font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--faint);
+         margin-bottom:10px}
+.figure{font-family:var(--display);font-weight:700;font-size:28px;line-height:1;letter-spacing:-1px;
+        color:var(--orange)}
+.figure em{font-family:var(--mono);font-style:normal;font-size:11px;color:var(--faint);
+           letter-spacing:2px;margin-left:7px}
+.kv{display:flex;justify-content:space-between;padding:5px 0;font-size:12px;color:var(--muted)}
+.kv b{color:var(--text);font-weight:400}
+.settle{font-family:var(--mono);width:100%;margin-top:12px;background:transparent;border:1px solid var(--line2);
+        border-radius:9px;color:var(--muted);padding:11px;cursor:pointer;
+        text-transform:uppercase;letter-spacing:2px;font-size:11px}
+.settle:hover{border-color:var(--orange);color:var(--orange)}
+.settle:disabled{color:var(--faint);border-color:var(--line);cursor:default}
+.foot{font-size:11px;line-height:1.6;color:var(--faint);margin-top:9px}
+.foot b{color:var(--muted);font-weight:400}
+.bounty{border-left:2px solid var(--dim);padding:5px 0 5px 10px;margin-bottom:9px}
+.bounty.done{border-left-color:var(--line2);opacity:.45}
+.bounty p{line-height:1.45;color:var(--muted);font-size:11px}
+.bounty .r{font-family:var(--display);font-weight:700;font-size:14px;color:var(--orange);letter-spacing:-0.2px}
+.bounty.done .r{color:var(--faint)}
+
+@media(max-width:960px){
+  body{overflow:auto}
+  main{grid-template-columns:1fr}
+  .pane.hist{border-right:0;border-bottom:1px solid var(--line)}
+  .pane.face{border-left:0;border-top:1px solid var(--line)}
+}
+
+/* ── sidebar: chats, and the agent they belong to ───────────────────────── */
+.side-top{padding:12px 12px 8px;display:flex;flex-direction:column;gap:8px;flex:none}
+.newchat{display:flex;align-items:center;gap:8px;width:100%;padding:9px 11px;cursor:pointer;
+  background:transparent;border:1px solid var(--line2);border-radius:9px;color:var(--text);
+  font-family:var(--sans);font-size:13px;text-align:left}
+.newchat:hover{background:#141418;border-color:#333}
+.newchat .ic{color:var(--orange)}
+.side-search{width:100%;padding:7px 10px 7px 30px;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%236b6b75' stroke-width='1.6' stroke-linecap='round'%3E%3Ccircle cx='9' cy='9' r='5.3'/%3E%3Cpath d='M12.9 12.9 17.2 17.2'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:9px 50%;background-size:14px 14px;background-color:#0e0e11;border:1px solid var(--line);
+  border-radius:8px;color:var(--text);font-family:var(--sans);font-size:12.5px;outline:none}
+.side-search:focus{border-color:#333}
+.side-search::placeholder{color:var(--faint)}
+
+.side-label{font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;color:var(--faint);
+  text-transform:uppercase;padding:10px 12px 4px;flex:none}
+.thr{display:flex;align-items:center;gap:6px;padding:9px 10px;border-radius:8px;cursor:pointer;
+  color:#cfcfcf;font-family:var(--sans);font-size:13px}
+.thr:hover{background:#141418}
+.thr.on{background:#1a1a1f;color:#fff}
+.thr .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.thr .dots{flex:none;opacity:0;border:0;background:transparent;color:var(--muted);cursor:pointer;
+  font-size:15px;line-height:1;padding:2px 4px;border-radius:5px}
+.thr:hover .dots,.thr.on .dots{opacity:1}
+.thr .dots:hover{background:#26262c;color:#fff}
+.thr-empty{color:var(--faint);font-family:var(--sans);font-size:12.5px;padding:10px 9px;line-height:1.6}
+
+.menu{position:fixed;z-index:60;min-width:150px;background:#141418;border:1px solid var(--line2);
+  border-radius:9px;padding:5px;box-shadow:0 14px 40px rgba(0,0,0,.6)}
+/* A ROW IS AN ICON, A LABEL AND AN OPTIONAL SHORTCUT — laid out, not stacked. Flex with a
+   fixed icon column means every label starts on the same x whether or not its neighbour has a
+   longer word, which is most of what makes a menu look built rather than assembled. */
+.menu button,.menu a{display:flex;align-items:center;gap:9px;width:100%;text-align:left;
+  padding:7px 10px;border:0;border-radius:6px;text-decoration:none;box-sizing:border-box;
+  background:transparent;color:var(--text);font-family:var(--sans);font-size:13px;cursor:pointer}
+.menu button:hover,.menu a:hover{background:#22222a}
+.menu button.danger:hover{background:#3a1410;color:#ff9d86}
+.menu a{color:inherit}
+.menu{padding:5px}
+.menu .ic{width:15px;height:15px;flex:none;color:var(--faint)}
+.menu button:hover .ic,.menu a:hover .ic{color:var(--muted)}
+.menu button.danger:hover .ic{color:#ff9d86}
+.menu span{flex:1;min-width:0}
+.menu em{font-style:normal;font-family:var(--mono);font-size:10px;color:var(--faint);flex:none}
+.menu hr{border:0;border-top:1px solid var(--line);margin:5px 8px}
+/* the header is identity, not an action — it must never look pressable */
+.menu-head{margin:4px 10px 6px;font-size:11px;line-height:1.3;color:var(--faint);
+  word-break:break-all;pointer-events:none}
+
+/* ── the agent this chat belongs to, and the wallet it came from ────────── */
+.side-foot{flex:none;border-top:1px solid var(--line);padding:10px 10px 12px}
+/* Matched to .wmail button on purpose: same padding, size, tracking and radius. The two doors
+   were 9px vs 10px padding, 11px vs 10.5px type and 8px vs 9px radius — close enough to look
+   like a mistake rather than a choice, which is most of why the block read as thrown together.
+   Only the colour separates them now: the wallet is the quieter one. */
+.wbtn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:10px 11px;
+  cursor:pointer;background:transparent;border:1px solid var(--line2);border-radius:8px;
+  color:var(--muted);font-family:var(--mono);font-size:10.5px;letter-spacing:1.4px;
+  text-transform:uppercase;box-sizing:border-box}
+.wbtn:hover{border-color:var(--orange);color:var(--orange);background:transparent}
+/* THE WALLET DOOR IS THE ONE FILLED BUTTON IN THIS SIDEBAR. It was a ghost outline — the same
+   weight as everything around it — so the one action the page actually wants read as a label.
+   Orange ground, white letters. Green on orange was tried and pulled — at button size the
+   two brand colours fight instead of pairing; white is the one that reads. */
+.wbtn.wallet{background:var(--orange);border-color:var(--orange);color:#fff;font-weight:600}
+.wnote{margin:2px 2px 0;font-size:11.5px;line-height:1.55;color:var(--faint)}
+.wbtn.wallet:hover{background:var(--orangeHi);border-color:var(--orangeHi);color:#fff}
+.agent-row{display:flex;align-items:center;gap:9px;width:100%;padding:7px 8px;border-radius:9px;
+  cursor:pointer;background:transparent;border:0;color:var(--text);text-align:left}
+.agent-row:hover{background:#141418}
+.agent-row img,.agent-row .ph{width:26px;height:26px;border-radius:50%;flex:none;object-fit:cover;
+  background:#1b1b20;border:1px solid var(--line2)}
+.agent-row .who{flex:1;min-width:0}
+.agent-row .nm{font-family:var(--sans);font-size:13px;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.agent-row .sub{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;color:var(--faint);
+  text-transform:uppercase}
+.agent-row .chev{color:var(--muted);font-size:11px;flex:none}
+.picker{position:fixed;z-index:60;max-height:320px;overflow-y:auto;min-width:250px;
+  background:#141418;border:1px solid var(--line2);border-radius:11px;padding:6px;
+  box-shadow:0 18px 50px rgba(0,0,0,.65)}
+.picker .hd{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;color:var(--faint);
+  text-transform:uppercase;padding:7px 9px 5px}
+.picker .none{color:var(--faint);font-family:var(--sans);font-size:12.5px;padding:8px 9px;
+  line-height:1.6}
+.nft{display:flex;align-items:center;gap:11px;margin:14px 0 10px}
+.nft-art{width:54px;height:54px;border-radius:11px;object-fit:cover;flex:none;
+  background:#141418;border:1px solid var(--line2)}
+.nft-id{min-width:0}
+.nft-name{font-family:var(--display);font-size:19px;font-weight:800;color:var(--text);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nft-sub{font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;color:var(--faint);
+  text-transform:uppercase;margin-top:2px}
+.nft-agent{font-family:var(--mono);font-size:12px;letter-spacing:.06em;color:var(--orange);
+  margin-bottom:2px}
+
+/* ── welcome: the empty state, in the dashboard's own language ──────────── */
+.welcome{padding:38px 30px 10px;max-width:760px}
+.w-h{font-family:'Bebas Neue',var(--display);font-size:64px;line-height:.92;letter-spacing:.5px;
+  color:var(--text);margin:0 0 10px}
+.w-dot{color:var(--orange)}
+.w-sub{font-family:var(--sans);font-size:14.5px;line-height:1.75;color:var(--muted);
+  margin:0 0 26px;max-width:56ch}
+.w-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.w-card{background:rgba(20,20,24,.55);border:1px solid var(--line);border-radius:14px;
+  padding:15px 16px;-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
+.w-card .w-k{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;
+  color:var(--orange);margin-bottom:8px}
+.w-card p{font-family:var(--sans);font-size:13px;line-height:1.65;color:var(--muted);margin:0}
+@media(max-width:900px){ .w-grid{grid-template-columns:1fr} .w-h{font-size:46px} }
+.pane.chat .welcome{flex:none;overflow-y:auto}
+
+/* nothing bound yet — a target, not an empty pane */
+.nft-add{display:flex;align-items:center;gap:12px;width:100%;margin:16px 0 12px;padding:12px;
+  background:transparent;border:1px dashed var(--line2);border-radius:14px;cursor:pointer;
+  text-align:left;color:var(--text)}
+.nft-add:hover{border-color:var(--orange);background:rgba(247,107,0,.05)}
+.nft-add .ring{flex:none;width:38px;height:38px;border-radius:50%;display:grid;place-items:center;
+  border:1px solid var(--orange);color:var(--orange);font-size:19px;line-height:1}
+.nft-add:hover .ring{background:var(--orange);color:#0a0a0a}
+.add-copy{min-width:0;display:block}
+.add-copy b{display:block;font-family:var(--sans);font-size:13.5px;font-weight:600}
+.add-copy i{display:block;font-style:normal;font-family:var(--sans);font-size:11.5px;
+  color:var(--faint);margin-top:2px;line-height:1.45}
+
+/* ── the menu bar ───────────────────────────────────────────────────────── */
+.topbar{flex:none;display:flex;align-items:center;gap:22px;height:52px;padding:0 18px;
+  border-bottom:1px solid var(--line);background:rgba(10,10,10,.86);
+  -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
+.tb-mark{font-family:'Bebas Neue',var(--display);font-size:21px;letter-spacing:.5px;
+  color:var(--text);text-decoration:none;line-height:1}
+.tb-mark i{font-style:normal;color:var(--orange)}
+.tb-nav{display:flex;align-items:center;gap:18px;flex:1}
+.tb-nav a{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--muted);text-decoration:none}
+.tb-nav a:hover{color:var(--text)}
+.tb-cta{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--orange);text-decoration:none;border:1px solid var(--orange);border-radius:999px;
+  padding:7px 15px}
+.tb-cta:hover{background:rgba(247,107,0,.12)}
+@media(max-width:900px){ .tb-nav a:nth-child(n+3){display:none} }
+.w-local{border-color:rgba(247,107,0,.35)}
+.w-dl{display:inline-block;margin-top:10px;font-family:var(--mono);font-size:10.5px;
+  letter-spacing:.12em;text-transform:uppercase;color:var(--orange);text-decoration:none;
+  border-bottom:1px solid rgba(247,107,0,.4);padding-bottom:2px}
+.w-dl:hover{color:var(--text);border-bottom-color:var(--text)}
+.tb-logo{display:flex;align-items:center;gap:7px;text-decoration:none;font-size:17px;
+  font-weight:800;line-height:1}
+.tb-logo .chev{display:block;flex:none;width:9px;height:15px}
+.tb-logo .mark{color:var(--green);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+.tb-logo .mark b{color:#fff;font-weight:inherit}
+/* green is a brand colour here too, not just the reply voice */
+/* The three card labels are GREEN, not orange. Orange is already carrying the border of the
+   card they sit in and the CTA under it; a third orange thing in the same 200px made the row
+   read as one wash. Green is the other brand colour and it is doing nothing else here. */
+.w-card .w-k{color:var(--green)}
+
+/* [hidden] is a UA rule at the lowest specificity, so ANY class rule that sets display —
+   .nft{display:flex}, .spec{display:grid} — silently beats it and the element renders anyway.
+   That is why an empty NFT frame kept appearing with no agent bound. One rule, page-wide. */
+[hidden]{display:none !important}
+
+/* ── model picker in the composer ───────────────────────────────────────── */
+.model-btn{flex:none;display:flex;align-items:center;gap:6px;padding:0 12px;height:100%;
+  background:transparent;border:0;border-right:1px solid var(--line);cursor:pointer;
+  color:var(--muted);font-family:var(--mono);font-size:11px;letter-spacing:.08em;
+  white-space:nowrap}
+.model-btn:hover{color:var(--text)}
+.model-btn .cv{font-size:9px;opacity:.7}
+.mpop{position:fixed;z-index:70;width:290px;background:#141418;border:1px solid var(--line2);
+  border-radius:12px;padding:6px;box-shadow:0 18px 50px rgba(0,0,0,.65)}
+.mpop .hd{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;color:var(--faint);
+  text-transform:uppercase;padding:8px 9px 5px}
+.mrow{display:flex;align-items:center;gap:9px;width:100%;padding:8px 9px;border:0;border-radius:8px;
+  background:transparent;color:var(--text);font-family:var(--sans);font-size:13px;cursor:pointer;
+  text-align:left}
+.mrow:hover{background:#22222a}
+.mrow .tick{flex:none;width:14px;color:var(--green)}
+.mrow .mi{flex:1;min-width:0}
+.mrow .mi b{display:block;font-weight:600}
+.mrow .mi i{display:block;font-style:normal;font-size:11px;color:var(--faint);margin-top:1px}
+.mrow.need{color:var(--muted)}
+.keybox{border-top:1px solid var(--line);margin-top:6px;padding:10px 9px 6px}
+.keybox label{display:block;font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--faint);margin-bottom:6px}
+.keybox input{width:100%;padding:8px 10px;background:#0e0e11;border:1px solid var(--line);
+  border-radius:8px;color:var(--text);font-family:var(--mono);font-size:12px;outline:none}
+.keybox input:focus{border-color:var(--orange)}
+.keybox .save{margin-top:8px;width:100%;padding:8px;border:0;border-radius:8px;cursor:pointer;
+  background:var(--orange);color:#0a0a0a;font-family:var(--mono);font-size:10.5px;
+  letter-spacing:.12em;text-transform:uppercase}
+.keybox .note{margin:8px 0 0;font-family:var(--sans);font-size:11px;line-height:1.55;
+  color:var(--faint)}
+.keybox .note b{color:var(--muted)}
+
+/* GREEN IS GENIE'S VOICE. It earns its place in exactly two spots: what Genie says, and the
+   one link that gives something away for free. Putting it on every button made five things
+   shout at once and none of them read as special. Orange stays the interface colour. */
+.w-dl{color:var(--green);border-bottom-color:rgba(143,232,20,.35)}
+.w-dl:hover{color:#fff;border-bottom-color:#fff}
+
+/* Genie's replies: green voice, with colour doing the highlighting */
+.line.face .md p{margin:0 0 10px;line-height:1.7}
+.line.face .md p:last-child{margin-bottom:0}
+.line.face .md h3,.line.face .md h4,.line.face .md h5{
+  font-family:var(--display);font-size:15px;font-weight:700;color:#fff;margin:14px 0 7px}
+.line.face .md b{color:#fff;font-weight:700}
+.line.face .md em{color:var(--warm);font-style:normal}
+.line.face .md code{font-family:var(--mono);font-size:12.5px;color:var(--orange);
+  background:rgba(247,107,0,.10);border:1px solid rgba(247,107,0,.22);border-radius:5px;
+  padding:1px 5px}
+.line.face .md pre{background:#0e0e11;border:1px solid var(--line2);border-radius:10px;
+  padding:12px 14px;overflow-x:auto;margin:10px 0}
+.line.face .md pre code{background:none;border:0;padding:0;color:#cfe8b0;font-size:12.5px;
+  line-height:1.6}
+.line.face .md ul,.line.face .md ol{margin:8px 0 12px;padding-left:20px;line-height:1.7}
+.line.face .md li{margin-bottom:4px}
+.line.face .md li::marker{color:var(--orange)}
+.line.face .md a{color:var(--blue);text-decoration:none;border-bottom:1px solid rgba(107,159,255,.4)}
+.line.face .md a:hover{color:#fff;border-bottom-color:#fff}
+.line.face .md img{max-width:100%;border-radius:10px;margin:8px 0;display:block}
+
+/* ── wish list ──────────────────────────────────────────────────────────── */
+.wish{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)}
+.wish:last-of-type{border-bottom:0}
+.wish .nm{flex:1;min-width:0;font-family:var(--mono);font-size:12.5px;color:var(--text);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wish .nm em{font-style:normal;color:var(--orange)}
+.wish a{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--orange);text-decoration:none;border:1px solid rgba(247,107,0,.35);
+  border-radius:99px;padding:3px 8px}
+.wish a:hover{background:rgba(247,107,0,.12)}
+.wish .x{border:0;background:transparent;color:var(--faint);cursor:pointer;font-size:14px;
+  line-height:1;padding:2px 4px;border-radius:5px}
+.wish .x:hover{color:#ff8a5c;background:#2a1512}
+.wish-add{display:flex;gap:6px;margin-top:10px}
+.wish-add input{flex:1;min-width:0;padding:7px 10px;background:#0e0e11;border:1px solid var(--line);
+  border-radius:8px;color:var(--text);font-family:var(--mono);font-size:12px;outline:none}
+.wish-add input:focus{border-color:var(--orange)}
+.wish-add button{flex:none;width:34px;border:1px solid var(--line2);border-radius:8px;
+  background:transparent;color:var(--orange);font-size:16px;line-height:1;cursor:pointer}
+.wish-add button:hover{border-color:var(--orange);background:rgba(247,107,0,.1)}
+.wish-empty{font-family:var(--sans);font-size:12px;color:var(--faint);line-height:1.6}
+
+/* ── featured collection strip ──────────────────────────────────────────── */
+.strip{display:flex;gap:8px;overflow-x:auto;padding:2px 0 8px;scrollbar-width:thin}
+.strip::-webkit-scrollbar{height:5px}
+.strip::-webkit-scrollbar-thumb{background:#2a2a32;border-radius:99px}
+.strip a{flex:none;display:block;width:64px;height:64px;border-radius:10px;overflow:hidden;
+  border:1px solid var(--line2)}
+.strip a:hover{border-color:var(--orange)}
+.strip img{width:100%;height:100%;object-fit:cover;display:block}
+.coll-link{display:inline-block;margin-top:2px;font-family:var(--mono);font-size:10px;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--orange);text-decoration:none;
+  border-bottom:1px solid rgba(247,107,0,.35);padding-bottom:2px}
+.coll-link:hover{color:#fff;border-bottom-color:#fff}
+/* featured collection: one tile */
+.coll{display:flex;align-items:center;gap:11px;padding:9px;border:1px solid var(--line2);
+  border-radius:12px;text-decoration:none;color:var(--text)}
+.coll:hover{border-color:var(--orange);background:rgba(247,107,0,.05)}
+.coll img{width:44px;height:44px;border-radius:10px;flex:none;object-fit:cover;
+  border:1px solid var(--line)}
+.coll-id{min-width:0}
+.coll-id b{display:block;font-family:var(--sans);font-size:13.5px;font-weight:600}
+.coll-id i{display:block;font-style:normal;font-family:var(--sans);font-size:11.5px;
+  color:var(--faint);margin-top:2px;line-height:1.45}
+.coll:hover .coll-id i{color:var(--orange)}
+
+/* ── left rail: four things an agent is for, one view at a time ─────────── */
+.ic{width:17px;height:17px;flex:none;display:block;fill:none;stroke:currentColor;
+  stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.rail-nav{padding:4px 8px 2px;display:grid;gap:1px;flex:none}
+.rail-nav .rail{display:flex;align-items:center;gap:9px;width:100%;padding:7px 9px;border:0;border-radius:8px;
+  background:transparent;color:#b9b9c0;font-family:var(--sans);font-size:13px;cursor:pointer;
+  text-align:left}
+.rail-nav .rail:hover{background:#141418;color:var(--text)}
+.rail-nav .rail.on{background:#1a1a1f;color:#fff}
+.rail-nav .rail .ic{color:var(--faint)}
+.rail-nav .rail.on .ic{color:var(--orange)}
+.rail-nav .rail:hover .ic{color:#9a9aa4}
+.rail-nav .rail em{margin-left:auto;font-style:normal;font-family:var(--mono);font-size:10.5px;
+  color:var(--faint)}
+
+/* ── account row: who you are, what you are answering with ─────────────── */
+.acct-row{flex:none;display:flex;align-items:center;gap:6px;padding:8px 8px 10px;
+  border-top:1px solid var(--line)}
+.acct{flex:1;min-width:0;display:flex;align-items:center;gap:9px;padding:6px 8px;border:0;
+  border-radius:9px;background:transparent;color:var(--text);cursor:pointer;text-align:left}
+.acct:hover{background:#141418}
+.acct .av{width:26px;height:26px;border-radius:50%;flex:none;background:#1b1b20;
+  border:1px solid var(--line2);background-size:cover;background-position:center}
+.acct .who{flex:1;min-width:0}
+.acct .who b{display:block;font-family:var(--sans);font-size:13px;font-weight:600;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.acct .who i{display:block;font-style:normal;font-family:var(--mono);font-size:9.5px;
+  letter-spacing:.08em;color:var(--faint);margin-top:1px}
+.acct .cv{color:var(--muted);flex:none;display:flex}
+/* every chevron is a caret beside text, never a full-size icon */
+.cv .ic{width:13px;height:13px}
+.gear{flex:none;width:30px;height:30px;display:grid;place-items:center;border-radius:8px;
+  color:var(--muted);text-decoration:none;font-size:15px}
+.gear:hover{background:#141418;color:var(--orange)}
+</style>
+
+<style id="in-app">
+  /* the window's own controls own the top-left corner; nothing else may sit there */
+  .tb-nav { display: none !important; }
+  .topbar { padding-left: 86px; }
+  .pane.hist .side-top { padding-top: 30px; }
+</style>
+</head>
+<body>
+
+<!-- The icon set: embed/icons.js. One <use href="#i-NAME"> and it is on the page. -->
+<script src="embed/icons.js"></script>
+
+<nav class="topbar">
+  <!-- The homepage logo, verbatim: orange chevron, green xEarn with a white x, white
+       chevron. Not a redrawn one — a second version of a logo is a second logo. -->
+  <a class="tb-logo" href="https://xearn.com/" aria-label="xEarn">
+    <svg class="chev" viewBox="0 0 50 80" aria-hidden="true"><path d="M50,0 L27.9,0 L2.5,41.5 L27.9,80 L50,80 L24.8,41.5 Z" fill="#fd6e01"/></svg>
+    <span class="mark"><b>x</b>Earn</span>
+    <svg class="chev" viewBox="0 0 50 80" aria-hidden="true"><path d="M0,0 L22.1,0 L47.5,41.5 L22.1,80 L0,80 L25.2,41.5 Z" fill="#fff"/></svg>
+  </a>
+  <div class="tb-nav">
+    <a href="https://xearn.com/">Home</a>
+    <a href="index.html">Ask Genie</a>
+    <a href="https://xearn.com/agent">.agent names</a>
+    <a href="https://xearn.com/faq">FAQ</a>
+  </div>
+  <a class="tb-cta" href="https://xearn.com/agent">Claim your .agent</a>
+</nav>
+
+
+<main>
+  <!-- ═══ what it has been taught ═══ -->
+  <!-- CHAT SIDEBAR. Conversations, not a feed. New chat, search, and a per-row menu, the way
+       every chat app works — so a returning visitor finds what they asked last time. -->
+  <section class="pane hist">
+    <div class="side-top">
+      <button class="newchat" id="newChat" type="button">
+        <svg class="ic" aria-hidden="true"><use href="#i-compose"/></svg> New chat
+      </button>
+      <input class="side-search" id="threadSearch" type="search" placeholder="Search chats"
+             autocomplete="off" aria-label="Search chats">
+    </div>
+    <nav class="rail-nav" id="railNav">
+      <button class="rail" data-view="agents" type="button"><svg class="ic" aria-hidden="true"><use href="#i-agent"/></svg>Agents<em id="railAgents"></em></button>
+      <button class="rail" data-view="skills" type="button"><svg class="ic" aria-hidden="true"><use href="#i-packs"/></svg>Skill packs</button>
+      <button class="rail" data-view="bounties" type="button"><svg class="ic" aria-hidden="true"><use href="#i-bounty"/></svg>Bounties<em id="railBounty"></em></button>
+      <button class="rail" data-view="earnings" type="button"><svg class="ic" aria-hidden="true"><use href="#i-earn"/></svg>Earnings<em id="railMesh"></em></button>
+    </nav>
+    <div class="side-label">Chats</div>
+    <div class="body" id="threads"></div>
+    <div class="side-foot" id="taught" hidden></div>
+    <div class="acct-row" id="acctRow">
+      <button class="acct" id="acctBtn" type="button">
+        <span class="av" id="acctAv"></span>
+        <span class="who"><b id="acctName">Guest</b><i id="acctSub">Genie 1 &middot; free</i></span>
+        <span class="cv"><svg class="ic" aria-hidden="true"><use href="#i-chev"/></svg></span>
+      </button>
+      <a class="gear" href="settings.html" title="Settings &amp; usage" aria-label="Settings and usage"><svg class="ic" aria-hidden="true"><use href="#i-gear"/></svg></a>
+    </div>
+    <div id="history" hidden></div>
+  </section>
+
+  <!-- ═══ the conversation ═══ -->
+  <section class="pane chat">
+    <!-- WELCOME. Talking is free and needs nothing; the wallet is only the door to the Mesh.
+           Saying that up front is the difference between "sign in to continue" and "ask me
+           anything". It disappears the moment they say something. -->
+      <div class="welcome" id="welcome">
+        <h1 class="w-h">Ask Genie<span class="w-dot">.</span></h1>
+        <p class="w-sub">Free to use. No account, no wallet, nothing to install.</p>
+        <div class="w-grid">
+          <div class="w-card">
+            <div class="w-k">Talk</div>
+            <p>Ask it anything, right now. Nothing to sign up for, nothing to pay.</p>
+          </div>
+          <div class="w-card">
+            <div class="w-k">Connect</div>
+            <p>Connect a wallet and every NFT you hold becomes an agent &mdash; its own name,
+              its own chats.</p>
+          </div>
+          <!-- The third card says something DIFFERENT in the app, because the sentence it makes
+               on the website ("the web app has a cap, download the local build") is addressed to
+               somebody who has not got it yet. In the window it is a pitch for what the reader is
+               already holding. Same card, the true half for where it is running — filled in by
+               script from data-app rather than by a build-time patch. -->
+          <div class="w-card w-local" id="wLocal">
+            <div class="w-k">Unlimited</div>
+            <p>This web app has a daily cap. The <b>free local build</b> doesn&rsquo;t &mdash; it runs
+              on your machine, and nothing leaves it.</p>
+            <a class="w-dl" href="https://xearn.com/#download">Download Genie&nbsp;1 &rarr;</a>
+          </div>
+        </div>
+      </div>
+    <div class="body" id="log"></div>
+    <form class="ask" id="ask">
+      <button class="model-btn" id="modelBtn" type="button" aria-haspopup="true">
+        <span id="modelName">Genie&nbsp;1</span><span class="cv"><svg class="ic" aria-hidden="true"><use href="#i-chev"/></svg></span>
+      </button>
+      <input id="say" placeholder="Teach it something!" autocomplete="off">
+      <button class="go" type="submit" id="send">Send</button>
+    </form>
+  </section>
+
+  <!-- ═══ the Face ═══ -->
+  <section class="pane face">
+    <div class="body">
+      <!-- THE BOUND NFT. When a wallet is connected and an agent picked, this is what the
+           agent IS — its art, its name, and its own on-chain metadata. Hidden until there is
+           one, because an empty frame reads as broken. -->
+      <!-- Nothing bound yet: a target to click, not an empty pane. An empty glass box tells
+           a visitor nothing; a circle with a plus tells them there is something to add. -->
+      <button class="nft-add" id="nftAdd" type="button">
+        <span class="ring">+</span>
+        <span class="add-copy">
+          <b>Add your agent</b>
+          <i>Connect a wallet &mdash; each NFT you hold becomes an agent</i>
+        </span>
+      </button>
+
+      <div class="nft" id="nftBox" hidden>
+        <img class="nft-art" id="nftArt" alt="">
+        <div class="nft-id">
+          <div class="nft-agent" id="nftAgent" hidden>—</div>
+          <div class="nft-name" id="nftName">—</div>
+          <div class="nft-sub" id="nftSub">—</div>
+        </div>
+      </div>
+      <dl class="spec" id="nftTraits" hidden></dl>
+
+
+      <!-- No wallet = no account, so zeros are meaningless and read as "you earned nothing".
+           Show the door instead, and only show the ledger once there is one to show. -->
+      <div class="rail" id="ledgerCta">
+        <h3>Earn on the Mesh</h3>
+        <p class="foot" style="margin-top:2px">Teach it something the Mesh doesn&rsquo;t know yet.
+          It gets written to the chain under your name &mdash; and you earn when it answers
+          someone else.</p>
+        <button class="settle" id="ctaConnect" type="button">Connect to the Mesh</button>
+      </div>
+
+      <div class="rail" id="ledgerReal" hidden>
+        <h3>Minted by this agent</h3>
+        <div class="figure" id="fCells">0<em>$MESH</em></div>
+        <div class="kv"><span>Waiting on the Mesh</span><b id="fPend">0</b></div>
+        <div class="kv"><span>Bounties earned</span><b id="fEarned">0</b></div>
+        <button class="settle" id="settle">Settle to the Mesh</button>
+        <p class="foot">Talking is not earning. Checked <b>server-side</b> —
+          if the Mesh holds it, nothing mints.</p>
+      </div>
+
+      <div class="rail">
+        <h3>Pending bounties</h3>
+        <div id="pendingBounties"></div>
+      </div>
+
+      <div class="rail" id="wishRail">
+        <h3>Wish list</h3>
+        <div id="wishes"></div>
+        <form class="wish-add" id="wishForm">
+          <input id="wishInput" placeholder="a name you want" autocomplete="off" maxlength="32">
+          <button type="submit" aria-label="Add to wish list">+</button>
+        </form>
+      </div>
+
+      <!-- Featured collection: the collection's own logo, its name, and the way in. One tile,
+           not a strip of thumbnails — the strip was more furniture than information. -->
+      <div class="rail">
+        <h3>Featured collection</h3>
+        <a class="coll" href="https://opensea.io/collection/builder-bots-ai"
+           target="_blank" rel="noopener">
+          <img src="assets/builderbots-logo.png" alt="" width="192" height="192">
+          <span class="coll-id">
+            <b>Builder Bots</b>
+            <i>The founding cohort &mdash; view on OpenSea &rarr;</i>
+          </span>
+        </a>
+      </div>
+
+      <div class="rail">
+        <h3>Open bounties</h3>
+        <div id="bounties"></div>
+        <p class="foot">Paid from the poster's balance — a bounty <b>never</b> mints.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- The Face. Geometry from extensions/orange-genie-extension 2/face.js —
+     small panel (isLarge=false), which is the dotted-outline face in the app. -->
+<script>
+const $ = s => document.querySelector(s);
+let FACE=null, ENGINE=null, TID=0;
+
+function log(cls, text){
+  const d=document.createElement('div'); d.className='line '+cls; d.textContent=text;
+  $('#log').appendChild(d); $('#log').scrollTop=1e9;
+}
+const pct = x => (x*100).toFixed(1)+'%';
+
+// The ledger figures on the Earnings view. This used to be loadFace(), which also painted the
+// trait plate, the rarity odds, the slug and the face canvas — all part of the face SCREEN that
+// was removed. Those ids are gone, so the very first line threw and the three figures that DO
+// still exist were never written. A repaint that touches one dead node paints nothing at all.
+// Every write below is guarded, so removing another block degrades this instead of breaking it.
+async function loadLedger(id){
+  let d; try { d = await (await fetch('/api/face?id='+id)).json(); } catch(e){ return; }
+  FACE=d.face; TID=FACE.id;
+  const set=(sel,v,html)=>{ const el=$(sel); if(el){ if(html) el.innerHTML=v; else el.textContent=v; } };
+  set('#fCells', d.cells.length+'<em>$MESH</em>', true);
+  set('#fPend',  d.pending);
+  set('#fEarned',d.earned);
+  renderHistory(d.history||[]);
+  loadBounties();
+}
+
+function renderHistory(h){
+  const el=$('#history');
+  if(!h.length){
+    el.innerHTML='<p class="empty">Nothing yet. Whatever you teach it lands here, '+
+                 'with what the Mesh made of it.</p>';
+    return;
+  }
+  el.innerHTML=h.slice().reverse().map(x=>
+    `<div class="hitem ${x.status==='minted'?'minted':''}"
+          data-q="${encodeURIComponent(x.q)}" data-a="${encodeURIComponent(x.a)}">
+       <div class="q"></div>
+       <div class="s">${x.status==='minted'?'+1 $MESH':'waiting on the mesh'}</div>
+     </div>`).join('');
+  // textContent, not innerHTML — the questions are user input.
+  el.querySelectorAll('.hitem').forEach((it,i)=>{
+    it.querySelector('.q').textContent = decodeURIComponent(it.dataset.q);
+    it.addEventListener('click',()=>{
+      $('#log').innerHTML='';
+      log('you', decodeURIComponent(it.dataset.q));
+      log('face', decodeURIComponent(it.dataset.a));
+    });
+  });
+}
+
+async function loadBounties(){
+  const d = await (await fetch('/api/bounties')).json();
+  $('#bounties').innerHTML = d.bounties.map(b=>
+    `<div class="bounty${b.open?'':' done'}">
+       <div class="r">${b.reward} $MESH</div>
+       <p>${b.text.replace(/</g,'&lt;')}${b.open?'':' — filled by #'+String(b.filled_by).padStart(3,'0')}</p>
+     </div>`).join('');
+}
+
+/* The idle lines live in the Face's voice (faces.py) and reach the person
+   through the transcript. This renderer has no text layer — it is a face, and
+   the words belong in the conversation. */
+
+// It watches you type. Nothing arbitrary — you are doing something, it responds.
+let typeT=null;
+$('#say').addEventListener('input', ()=>{
+  if(window.ENGINE && ENGINE.react) ENGINE.react('listening');
+  clearTimeout(typeT);
+  typeT=setTimeout(()=>{ if(window.ENGINE&&ENGINE.react) ENGINE.react('rest'); }, 2500);
+});
+
+$('#ask').addEventListener('submit', async e=>{
+  e.preventDefault();
+  const text=$('#say').value.trim(); if(!text) return;
+  $('#say').value=''; log('you',text);
+  $('#send').disabled=true; clearTimeout(typeT);
+  if(window.ENGINE && ENGINE.react) ENGINE.react('thinking');
+  try{
+    const r=await fetch('/api/chat',{method:'POST',
+      headers:Object.assign({'Content-Type':'application/json'},
+        (function(m){var h=m?{'x-genie-model':m.model}:{};
+          if(m&&m.key)h['x-genie-key']=m.key;
+          if(m&&m.all)h['x-genie-keys']=JSON.stringify(m.all);   // the whole ring, so it can ladder
+          return h;})(
+          window.__genieModel&&window.__genieModel())),
+      body:JSON.stringify({id:TID,text})});
+    const d=await r.json();
+    if(!r.ok){ log('sys',d.error); if(window.ENGINE&&ENGINE.react) ENGINE.react('flat',3); }
+    else{
+      log('face',d.reply);
+      // it just spoke — hold the speaking face for about as long as reading takes
+      if(window.ENGINE && ENGINE.react)
+        ENGINE.react('speaking', Math.min(9, 2 + d.reply.split(/\s+/).length * 0.28));
+      $('#fPend').textContent=d.pending;
+      const f=await (await fetch('/api/face?id='+TID)).json();
+      renderHistory(f.history||[]);
+    }
+  }catch(err){ log('sys',String(err)); if(window.ENGINE&&ENGINE.react) ENGINE.react('flat',3); }
+  $('#send').disabled=false; $('#say').focus();
+});
+
+$('#settle').addEventListener('click', async ()=>{
+  const b=$('#settle'); b.disabled=true; b.textContent='Asking the Mesh…';
+  log('sys','checking every pending exchange against the chain. this is the slow part, and it is the honest part.');
+  if(window.ENGINE && ENGINE.react) ENGINE.react('thinking');
+  try{
+    // The old call sent {id:TID} — a face number, which tells the server neither WHO is
+    // settling nor WHAT is being settled. It sends the wallet, the .agent name it is writing
+    // under, and the exchanges themselves; the server re-derives the name from the registry
+    // and refuses if the wallet does not hold it.
+    const st = (window.__settleState && window.__settleState()) || {};
+    if (!st.owner || !st.name) {
+      log('sys', st.owner ? 'claim a .agent name first — a block has to have an author.'
+                          : 'connect a wallet first — the Mesh records who taught it.');
+      b.disabled=false; b.textContent='Settle to the Mesh'; return;
+    }
+    const d=await (await fetch('/api/settle',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({owner:st.owner, name:st.name, items:st.items})})).json();
+    if (d.error) log('sys', d.error);
+    (d.results||[]).forEach(r=>{
+      let s=(r.minted?'+1 $MESH · ':'no mint · ')+r.reason;
+      if(r.depth!=null) s+='   mesh coverage '+r.depth.toFixed(2);
+      if(r.minted){
+        s+='   block '+r.height+' '+String(r.hash||'').slice(0,8)+
+           ' · landed '+((r.stores||[]).join('+')||'none');
+        if(r.remote_error) s+=' (replica behind: '+r.remote_error+')';
+      }
+      log(r.minted?'sys mint':'sys', s);
+    });
+    (d.bounties_paid||[]).forEach(p=>
+      log('sys mint','+'+p.reward+' $MESH bounty filled — "'+p.text+'"  match '+p.match));
+    if(!d.results || !d.results.length) log('sys','nothing pending.');
+    // The Mesh has ruled. That is the strongest thing that happens here, so it
+    // is the strongest reaction: taught something new, or told it already knew.
+    if(window.ENGINE && ENGINE.react){
+      const minted = (d.results||[]).some(r=>r.minted);
+      ENGINE.react(minted ? 'pleased' : 'flat', minted ? 8 : 4);
+    }
+
+    // Refresh the figures without wiping the settle report out of the log.
+    loadLedger(TID);
+  }catch(err){ log('sys',String(err)); }
+  b.disabled=false; b.textContent='Settle to the Mesh';
+});
+
+// #prev, #next, #genieCanvas and #sNow all belonged to the face screen and are gone. The
+// handlers stayed behind, and `$('#prev').onclick = ...` on a missing element throws — which
+// killed every statement after it in this block, including the ledger load. That is why the
+// Earnings figures sat at zero: not a data problem, one line of rot from a deleted screen.
+loadLedger(0);
+</script>
+
+<script>
+/* SEEDED FROM THE HOMEPAGE. The hero's Ask box hands its text over as ?q=. Without this the
+   visitor types a question on the homepage, lands here, and has to type it again — which is
+   the moment most people leave.
+
+   IT HAS TO WAIT FOR THE PAGE'S OWN BOOT. Setting the field at parse time looked like it
+   worked — the field was set and the URL was cleaned — but the page boots afterwards, fetches
+   the face and re-renders, and the value was gone by the time anything could submit it. So:
+   wait for load, then a tick, then fill and submit the real form, so the same path runs that
+   would have run if the question had been typed here. */
+window.addEventListener("load", function () {
+  var q = new URLSearchParams(location.search).get("q");
+  if (!q) return;
+  setTimeout(function () {
+    var say = document.getElementById("say"), form = document.getElementById("ask");
+    if (!say || !form) return;
+    say.value = q;
+    history.replaceState(null, "", location.pathname);   // a refresh must not re-ask
+    if (form.requestSubmit) form.requestSubmit();
+    else form.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
+  }, 400);
+});
+</script>
+
+<script>
+/* ═══ SIDEBAR: CHATS, AND THE AGENT THEY BELONG TO ═══════════════════════════════════════
+   Two ideas, and the second is the one that matters:
+
+   1. Conversations, not one endless feed. New chat, search, rename, delete — the shape every
+      chat app has, because a returning visitor needs to find what they asked last time.
+
+   2. A CHAT BELONGS TO AN AGENT, AND AN NFT IS AN AGENT. Connect a wallet, pick an NFT, and
+      you are talking to THAT agent: its own face, its own chats. Pick a different NFT and it
+      is a different agent with a different history — nothing bleeds between them, because the
+      thread store is keyed by contract:tokenId.
+
+   The face follows too: the token id picks the Face, so an agent looks like itself every time.
+
+   STORAGE IS LOCAL AND PER-AGENT. There is no account here, so chats live in this browser and
+   never leave it. Keyed per agent so switching agents cannot mix two agents' conversations.
+   ════════════════════════════════════════════════════════════════════════════════════════ */
+(function () {
+  var KEY = "og.ask.threads.";                 // + agent key
+  var AGENT_KEY = "og.ask.agent";
+  var agent = null;                            // {contract, tokenId, name, image}
+  var threads = [], curId = null, wallet = null, nfts = [], agentNames = [];
+
+  var $ = function (s) { return document.querySelector(s); };
+  var threadsEl = $("#threads"), footEl = $("#taught"), searchEl = $("#threadSearch");
+
+  function akey() { return agent ? (agent.contract + ":" + agent.tokenId).toLowerCase() : "guest"; }
+  function load() {
+    try { threads = JSON.parse(localStorage.getItem(KEY + akey()) || "[]"); }
+    catch (e) { threads = []; }
+    if (!Array.isArray(threads)) threads = [];
+  }
+  function save() {
+    try { localStorage.setItem(KEY + akey(), JSON.stringify(threads.slice(0, 200))); }
+    catch (e) { /* private mode — the page still works, it just will not remember */ }
+  }
+  function cur() { return threads.find(function (t) { return t.id === curId; }); }
+
+  // Making a thread and clearing the screen are two different jobs. They were one function,
+  // and the hook called it on the first message — which wiped the line that had just been
+  // drawn. Only the New chat BUTTON should ever clear the log.
+  function startThread() {
+    curId = "t" + Date.now().toString(36);
+    threads.unshift({ id: curId, title: "New chat", ts: Date.now(), msgs: [] });
+    save(); render();
+  }
+  function newChat() {
+    startThread();
+    var log = document.getElementById("log");
+    if (log) log.innerHTML = "";
+    var say = document.getElementById("say"); if (say) say.focus();
+  }
+
+  // Every line the page prints goes through log(), so wrapping it is the one place that
+  // catches both sides of the conversation without touching the page's own handler.
+  function hook() {
+    if (typeof window.log !== "function" || window.log.__wrapped) return;
+    var orig = window.log;
+    window.log = function (cls, text) {
+      // The page clears #log on boot, so the welcome lives OUTSIDE it — otherwise the boot
+      // wiped it before anyone saw it. It goes on the first real message either way.
+      var w = document.getElementById("welcome");
+      if (w && (cls === "you" || cls === "face")) w.remove();
+      orig.apply(this, arguments);
+      if (cls !== "you" && cls !== "face") return;
+      var t = cur();
+      if (!t) { startThread(); t = cur(); }   // never clears what was just printed
+      t.msgs.push({ r: cls, t: String(text) });
+      if (cls === "you" && (t.title === "New chat" || !t.title)) {
+        t.title = String(text).slice(0, 60);
+      }
+      t.ts = Date.now();
+      save(); render();
+    };
+    window.log.__wrapped = true;
+    if (orig.__md) window.log.__md = true;   // see the note on the renderer's flags
+  }
+
+  function open(id) {
+    curId = id;
+    var t = cur(); if (!t) return;
+    var log = document.getElementById("log");
+    if (log) {
+      log.innerHTML = "";
+      t.msgs.forEach(function (m) {
+        var d = document.createElement("div");
+        d.className = "line " + m.r; d.textContent = m.t; log.appendChild(d);
+      });
+      log.scrollTop = 1e9;
+    }
+    render();
+  }
+
+  // One menu builder for the whole page. items = [{t, href, danger, fn}]; a falsy entry is
+  // skipped, so a caller can write `wallet && {…}` instead of assembling an array by hand.
+  // `up:true` hangs the menu ABOVE y — the account row sits on the bottom edge, where a menu
+  // dropped downward renders off-screen.
+  function menuAt(x, y, items, up) {
+    document.querySelectorAll(".menu").forEach(function (m) { m.remove(); });
+    var m = document.createElement("div");
+    m.className = "menu";
+    m.style.left = Math.min(x, innerWidth - 190) + "px";
+    m.style.top = y + "px";
+    items.filter(Boolean).forEach(function (it) {
+      // A menu is not a list of words. Three row kinds carry almost all the difference between
+      // something that reads as an account menu and something that reads as two stacked
+      // sentences: a HEADER saying whose account this is, SEPARATORS grouping unrelated
+      // actions, and an ICON on every row so the eye lands before it reads.
+      if (it.sep) { m.appendChild(document.createElement("hr")); return; }
+      if (it.head) {
+        var h = document.createElement("p");
+        h.className = "menu-head";
+        h.textContent = it.head;
+        m.appendChild(h);
+        return;
+      }
+      var el = document.createElement(it.href ? "a" : "button");
+      if (it.href) el.href = it.href; else el.type = "button";
+      if (it.danger) el.className = "danger";
+      if (it.icon) el.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#i-' + it.icon + '"/></svg>';
+      var label = document.createElement("span");
+      label.textContent = it.t;
+      el.appendChild(label);
+      // The shortcut sits right-aligned and quiet — it teaches without asking to be read.
+      if (it.key) { var k = document.createElement("em"); k.textContent = it.key; el.appendChild(k); }
+      if (it.fn) el.onclick = function () { it.fn(); m.remove(); };
+      m.appendChild(el);
+    });
+    document.body.appendChild(m);
+    if (up) m.style.top = Math.max(8, y - m.getBoundingClientRect().height) + "px";
+    setTimeout(function () {
+      document.addEventListener("click", function once() {
+        m.remove(); document.removeEventListener("click", once);
+      });
+    }, 0);
+    return m;
+  }
+
+  function menu(x, y, id) {
+    document.querySelectorAll(".menu").forEach(function (m) { m.remove(); });
+    var m = document.createElement("div");
+    m.className = "menu"; m.style.left = Math.min(x, innerWidth - 170) + "px"; m.style.top = y + "px";
+    var ren = document.createElement("button"); ren.textContent = "Rename";
+    var del = document.createElement("button"); del.textContent = "Delete"; del.className = "danger";
+    ren.onclick = function () {
+      var t = threads.find(function (z) { return z.id === id; });
+      var v = prompt("Rename chat", t ? t.title : ""); if (v) { t.title = v.slice(0, 80); save(); render(); }
+      m.remove();
+    };
+    del.onclick = function () {
+      threads = threads.filter(function (z) { return z.id !== id; });
+      if (curId === id) { curId = null; var l = document.getElementById("log"); if (l) l.innerHTML = ""; }
+      save(); render(); m.remove();
+    };
+    m.appendChild(ren); m.appendChild(del); document.body.appendChild(m);
+    setTimeout(function () {
+      document.addEventListener("click", function once() {
+        m.remove(); document.removeEventListener("click", once);
+      });
+    }, 0);
+  }
+
+  function render() {
+    if (!threadsEl) return;
+    var q = (searchEl && searchEl.value || "").trim().toLowerCase();
+    var list = q ? threads.filter(function (t) {
+      return (t.title || "").toLowerCase().indexOf(q) > -1 ||
+             t.msgs.some(function (m) { return m.t.toLowerCase().indexOf(q) > -1; });
+    }) : threads;
+
+    threadsEl.innerHTML = "";
+    if (!list.length) {
+      var e = document.createElement("div"); e.className = "thr-empty";
+      e.textContent = q ? "Nothing matches that." : "No chats yet. Ask it something.";
+      threadsEl.appendChild(e); return;
+    }
+    list.forEach(function (t) {
+      var row = document.createElement("div");
+      row.className = "thr" + (t.id === curId ? " on" : "");
+      var lab = document.createElement("div"); lab.className = "t"; lab.textContent = t.title || "New chat";
+      var dots = document.createElement("button"); dots.className = "dots"; dots.textContent = "\u22EF";
+      dots.setAttribute("aria-label", "Chat options");
+      row.onclick = function () { open(t.id); };
+      dots.onclick = function (ev) { ev.stopPropagation(); var r = dots.getBoundingClientRect(); menu(r.left, r.bottom + 4, t.id); };
+      row.appendChild(lab); row.appendChild(dots); threadsEl.appendChild(row);
+    });
+  }
+
+  /* ── the agent ──────────────────────────────────────────────────────── */
+  // Paint the bound NFT: its art, its name, and its own on-chain metadata. This is what the
+  // panel is FOR once a wallet is connected — the generated Face is the agent's expression,
+  // the NFT is what the agent is.
+  // A painter decides WHICH of its blocks is right (bound vs not). The rail decides whether
+  // its group is on screen at all. Without this second check the agent card and the earnings
+  // call-to-action reappeared in every view the moment anything repainted.
+  function viewOn(v) { return !window.__railView || window.__railView() === v; }
+
+  function paintNft(a) {
+    var box = document.getElementById("nftBox"), tr = document.getElementById("nftTraits");
+    var add = document.getElementById("nftAdd");
+    if (!box || !tr) return;
+    var live = viewOn("agents");
+    if (add) add.hidden = !live || !!a;
+    if (!a || !live) { box.hidden = true; tr.hidden = true; return; }
+    box.hidden = false;
+    var art = document.getElementById("nftArt");
+    if (art) { art.src = a.image || ""; art.style.visibility = a.image ? "" : "hidden"; }
+    paintNames(a);
+    var nm = document.getElementById("nftName"); if (nm) nm.textContent = a.name || "Agent";
+    var sb = document.getElementById("nftSub");
+    if (sb) sb.textContent = (a.collection || "agent") + " \u00B7 #" + String(a.tokenId).slice(0, 10);
+
+    tr.innerHTML = "";
+    var traits = a.traits || [];
+    tr.hidden = !traits.length;
+    traits.forEach(function (t) {
+      var d = document.createElement("div");
+      var dt = document.createElement("dt"); dt.textContent = t.k;
+      var dd = document.createElement("dd"); dd.textContent = t.v;
+      d.appendChild(dt); d.appendChild(dd); tr.appendChild(d);
+    });
+  }
+
+  /* ── NAMES ON AN AGENT ──────────────────────────────────────────────────────────────────
+     MANY NAMES, ONE AGENT — the way ENS works. The wallet is what proves control, so any name
+     it holds may point at any agent it holds. A local Genie can answer to fifty names if the
+     machine can carry them.
+
+     This used to show a name only when the wallet held EXACTLY ONE, reasoning that nothing on
+     chain says which name goes with which token. The reasoning was right and the conclusion was
+     wrong: it is not an ambiguity to resolve, it is a CHOICE the holder makes. Two names meant
+     the agent showed none at all, and settle refused for want of an author.
+
+     THE BINDING IS LOCAL, DELIBERATELY. The contract is not being changed, so nothing on chain
+     records name->agent. What IS on chain — and what /api/settle re-checks on every write — is
+     that the wallet HOLDS the name. Picking here decides which of your names authors the block;
+     it cannot make you the author of a name you do not hold.
+
+     PRIMARY IS THE FIRST. A block carries one author, so the first attached name signs and the
+     rest are aliases resolving to the same agent. */
+  var NAMEMAP = "og.ask.agentnames";
+
+  function agentKey(a) { return a ? (a.contract + ":" + a.tokenId).toLowerCase() : ""; }
+
+  function namesOn(a) {
+    var key = agentKey(a); if (!key) return [];
+    var map = {}; try { map = JSON.parse(localStorage.getItem(NAMEMAP) || "{}"); } catch (e) {}
+    var picked = map[key] || [];
+    // Only names the wallet STILL holds. A name that was sold has to stop appearing the moment
+    // the registry says so, or the page keeps showing an authorship that is gone.
+    var held = agentNames.map(function (n) { return n.name; });
+    return picked.filter(function (n) { return held.indexOf(n) > -1; });
+  }
+
+  function setNamesOn(a, list) {
+    var key = agentKey(a); if (!key) return;
+    var map = {}; try { map = JSON.parse(localStorage.getItem(NAMEMAP) || "{}"); } catch (e) {}
+    if (list.length) map[key] = list; else delete map[key];
+    try { localStorage.setItem(NAMEMAP, JSON.stringify(map)); } catch (e) {}
+  }
+
+  function paintNames(a) {
+    var ag = document.getElementById("nftAgent");
+    if (!ag) return;
+    var mine = namesOn(a);
+
+    // One name held and nothing chosen: attach it on sight. There is no decision to make, and
+    // making someone click the only option is ceremony.
+    if (!mine.length && agentNames.length === 1) {
+      mine = [agentNames[0].name];
+      setNamesOn(a, mine);
+    }
+
+    ag.hidden = false;
+    ag.innerHTML = "";
+    mine.forEach(function (n, i) {
+      var c = document.createElement("span");
+      c.className = "agname" + (i === 0 ? " primary" : "");
+      c.textContent = n;
+      if (i === 0) c.title = "Signs the blocks this agent settles";
+      ag.appendChild(c);
+    });
+
+    var spare = agentNames.filter(function (n) { return mine.indexOf(n.name) === -1; });
+    var b = document.createElement("button");
+    b.className = "agname add"; b.type = "button";
+    b.textContent = mine.length ? "+" : "attach a name";
+    b.onclick = function (ev) {
+      ev.stopPropagation();
+      var r = b.getBoundingClientRect();
+      menuAt(r.left, r.bottom + 6, [].concat(
+        spare.map(function (n) {
+          return { t: "Attach " + n.name, fn: function () {
+            setNamesOn(a, namesOn(a).concat([n.name])); paintNames(a); } };
+        }),
+        mine.length > 1 ? mine.slice(1).map(function (n) {
+          return { t: "Remove " + n, danger: true, fn: function () {
+            setNamesOn(a, namesOn(a).filter(function (x) { return x !== n; })); paintNames(a); } };
+        }) : [],
+        spare.length ? [] : [{ t: "Claim another name", href: "/agent" }]
+      ));
+    };
+    ag.appendChild(b);
+  }
+
+  // Pending: what this agent has taught the Mesh that has not settled yet. Real entries from
+  // the face ledger, never a placeholder — an invented pending line is an invented debt.
+  function paintPending(a) {
+    var el = document.getElementById("pendingBounties");
+    if (!el) return;
+    el.innerHTML = "";
+    fetch("/api/face?id=" + encodeURIComponent(a ? a.tokenId : 0))
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var pend = (d.history || []).filter(function (h) { return h.status !== "minted"; });
+        if (!pend.length) {
+          var n = document.createElement("p"); n.className = "foot";
+          n.textContent = "Nothing waiting yet. New things it learns land here first.";
+          el.appendChild(n); return;
+        }
+        pend.slice(0, 8).forEach(function (h) {
+          var d2 = document.createElement("div"); d2.className = "bounty pending";
+          d2.textContent = String(h.q || "").slice(0, 120);
+          el.appendChild(d2);
+        });
+      })
+      .catch(function () { /* leave it empty rather than show a wrong number */ });
+  }
+
+  function setAgent(a) {
+    agent = a;
+    try { localStorage.setItem(AGENT_KEY, JSON.stringify(a)); } catch (e) {}
+    // The Face follows the token, so an agent looks like itself every time.
+    if (a && window.setFaceToken) window.setFaceToken(a.tokenId);
+    paintNft(a); paintPending(a);
+    curId = null;
+    var l = document.getElementById("log"); if (l) l.innerHTML = "";
+    load(); render(); foot();
+  }
+
+  function pick(x, y) {
+    document.querySelectorAll(".picker").forEach(function (m) { m.remove(); });
+    var m = document.createElement("div");
+    m.className = "picker";
+    m.style.left = Math.min(x, innerWidth - 270) + "px";
+    m.style.bottom = (innerHeight - y + 8) + "px";
+    var hd = document.createElement("div"); hd.className = "hd"; hd.textContent = "Your agents";
+    m.appendChild(hd);
+    if (!nfts.length) {
+      var n = document.createElement("div"); n.className = "none";
+      n.textContent = "No NFTs found in this wallet. Every NFT you hold is an agent you can talk to.";
+      m.appendChild(n);
+    } else {
+      nfts.forEach(function (n) {
+        var b = document.createElement("button"); b.className = "agent-row";
+        b.innerHTML = (n.image ? '<img alt="" src="' + n.image + '">' : '<span class="ph"></span>');
+        var w = document.createElement("div"); w.className = "who";
+        var nm = document.createElement("div"); nm.className = "nm"; nm.textContent = n.name;
+        var sb = document.createElement("div"); sb.className = "sub";
+        sb.textContent = (n.collection || "agent") + " \u00B7 #" + String(n.tokenId).slice(0, 8);
+        w.appendChild(nm); w.appendChild(sb); b.appendChild(w);
+        b.onclick = function () { setAgent(n); m.remove(); };
+        m.appendChild(b);
+      });
+    }
+    document.body.appendChild(m);
+    setTimeout(function () {
+      document.addEventListener("click", function once() { m.remove(); document.removeEventListener("click", once); });
+    }, 0);
+  }
+
+  window.__ledgerState = function () { ledgerState(); };
+  window.__paintAgentState = function () { paintNft(agent); ledgerState(); paintAcct(); };
+
+  // The settle button lives in an earlier script block that has no access to the wallet, the
+  // names or the threads — they are closed over in here. Rather than lift that state to a
+  // global where anything could write it, expose one reader.
+  //
+  // WHICH NAME IT WRITES UNDER: only when the wallet holds exactly one. The name and the NFT
+  // are separate tokens that share a holder and nothing else, so with two names there is no
+  // fact on chain saying which one authored this — and picking one would be inventing the
+  // binding the rest of this page refuses to invent.
+  window.__settleState = function () {
+    var t = threads.filter(function (z) { return z.id === curId; })[0];
+    var msgs = (t && t.msgs) || [];
+    var items = [];
+    for (var i = 0; i < msgs.length - 1; i++) {
+      if (msgs[i].r === "you" && msgs[i + 1] && msgs[i + 1].r !== "you") {
+        items.push({ q: msgs[i].t, a: msgs[i + 1].t });
+      }
+    }
+    // The PRIMARY attached name authors the block; a wallet with one name and no explicit pick
+    // still settles under it.
+    var picked = namesOn(agent)[0] || (agentNames.length === 1 ? agentNames[0].name : null);
+    return {
+      owner: wallet,
+      name: picked ? String(picked).replace(/\.agent$/i, "") : null,
+      items: items.slice(-10),
+    };
+  };
+  function ledgerState() {
+    var cta = document.getElementById("ledgerCta"), real = document.getElementById("ledgerReal");
+    if (!cta || !real) return;
+    var live = viewOn("earnings");
+    var on = !!(wallet && agent);
+    cta.hidden = !live || on;
+    real.hidden = !live || !on;
+  }
+
+  function foot() {
+    ledgerState();
+    if (!footEl) return;
+    footEl.hidden = false; footEl.innerHTML = "";
+    if (!wallet) {
+      // The Google door is drawn only when Alchemy says it is open. The alternative — draw it
+      // always and let it fail on press — is the thing this page keeps having to un-ship.
+      if (signInMethods.google) {
+        var g = document.createElement("button"); g.className = "wbtn primary"; g.type = "button";
+        g.innerHTML = '<span class="gmark" aria-hidden="true"></span>Continue with Google';
+        g.onclick = signInWithGoogle; footEl.appendChild(g);
+      }
+
+      // Email is enabled today and needs nothing installed, so it is a real door rather than a
+      // fallback. Two steps, because the code has to arrive before it can be typed.
+      if (signInMethods.email) {
+        var ef = document.createElement("form"); ef.className = "wmail";
+        ef.innerHTML =
+          '<p class="wkick">Join the Mesh</p>' +
+          '<input type="email" name="email" placeholder="you@email.com" autocomplete="email" required>' +
+          '<input type="text" name="code" placeholder="6-digit code" inputmode="numeric" ' +
+                 'autocomplete="one-time-code" maxlength="8" hidden>' +
+          '<button type="submit">Continue with email</button>' +
+          '<p class="wmsg" hidden></p>';
+        var stage = "email";
+        ef.onsubmit = async function (ev) {
+          ev.preventDefault();
+          var em = ef.email, cd = ef.code, bt = ef.querySelector("button"),
+              msg = ef.querySelector(".wmsg");
+          bt.disabled = true;
+          try {
+            await loadSigner();
+            if (stage === "email") {
+              await window.GenieSignIn.emailStart(em.value);
+              stage = "code";
+              em.hidden = true; cd.hidden = false; cd.focus();
+              bt.textContent = "Sign in";
+              msg.hidden = false;
+              msg.textContent = "Code sent to " + em.value + ".";
+            } else {
+              var u = await window.GenieSignIn.emailCode(cd.value);
+              signedIn = u;
+              try { localStorage.setItem("og.ask.signedin", "1"); } catch (e) {}
+              await adopt(u.address);
+              return;                       // foot() has repainted this away
+            }
+          } catch (e) {
+            msg.hidden = false;
+            msg.textContent = stage === "code"
+              ? "That code did not work. Check it, or start again."
+              : "Could not send the code. Try again in a moment.";
+          }
+          bt.disabled = false;
+        };
+        footEl.appendChild(ef);
+      }
+
+      // A divider, so the two doors read as alternatives rather than as one broken form. With
+      // the email pair stacked straight onto a differently-weighted wallet button, the whole
+      // block looked bolted together — which is the last impression a sign-in should give.
+      // The divider only belongs where there are in fact two doors. With no extension present
+      // it sat above a sentence explaining that there is no second door.
+      if (signInMethods.email && window.ethereum) {
+        var or = document.createElement("div"); or.className = "wor";
+        or.innerHTML = "<span>or</span>";
+        footEl.appendChild(or);
+      }
+
+      // A BROWSER EXTENSION IS NOT AVAILABLE IN A NATIVE WINDOW. Wallet extensions inject
+      // window.ethereum into a browser tab; the app's webview is not a tab and never receives
+      // it, so this button could not work in the app no matter what it was wired to. It was
+      // drawn anyway, in three places, and pressing any of them did nothing — which is the
+      // exact impression a wallet button must never give.
+      //
+      // So the button is drawn from what is actually present. With an extension it connects.
+      // Without one it says what to do instead, and the email door above it — which produces a
+      // real address with no extension at all — is the one that stays.
+      // THE WALLET BUTTON IS BACK IN THE APP, WITH A DOOR BEHIND IT.
+      // An extension injects window.ethereum into a browser TAB and never into this window, so
+      // in the app the button used to call something that does not exist. It now hands off: the
+      // app opens the real browser at /connect-app, the extension does its normal job there,
+      // and the address returns over genie1://. Same button, same words, and now it works in
+      // both places — which is better than a window that quietly has one fewer door.
+      if (window.ethereum || IN_APP) {
+        var b = document.createElement("button"); b.className = "wbtn wallet"; b.type = "button";
+        b.textContent = "Connect a wallet";
+        b.onclick = connect; footEl.appendChild(b);
+        if (IN_APP && !window.ethereum) {
+          var hn = document.createElement("p"); hn.className = "wnote";
+          hn.textContent = "Opens your browser, where your wallet lives.";
+          footEl.appendChild(hn);
+        }
+      } else {
+        var nb = document.createElement("p"); nb.className = "wnote";
+        nb.textContent = "No wallet extension found in this browser. Sign in with email above " +
+                         "and you get an address of your own, with no extension to install.";
+        footEl.appendChild(nb);
+      }
+
+      // NO CAPTION. The line that was here read "No extension needed. Your keys stay yours —
+      // held in a secure enclave, never by us." It was written for the email/Google door, and
+      // once Google was off it sat directly under "Connect a wallet" — which DOES need an
+      // extension — so it contradicted the button above it. It also volunteered "keys" and
+      // "enclave" to someone who only wanted to sign in.
+      //
+      // Each control now says its own name and nothing else explains it.
+      return;
+    }
+    var row = document.createElement("button"); row.className = "agent-row"; row.type = "button";
+    row.innerHTML = (agent && agent.image) ? '<img alt="" src="' + agent.image + '">' : '<span class="ph"></span>';
+    var w = document.createElement("div"); w.className = "who";
+    var nm = document.createElement("div"); nm.className = "nm";
+    nm.textContent = agent ? agent.name : "Choose an agent";
+    var sb = document.createElement("div"); sb.className = "sub";
+    sb.textContent = wallet.slice(0, 6) + "\u2026" + wallet.slice(-4);
+    w.appendChild(nm); w.appendChild(sb);
+    var ch = document.createElement("span"); ch.className = "chev"; ch.textContent = "\u25B2";
+    row.appendChild(w); row.appendChild(ch);
+    row.onclick = function (ev) { ev.stopPropagation(); var r = row.getBoundingClientRect(); pick(r.left, r.top); };
+    footEl.appendChild(row);
+  }
+
+  /* ── two doors to the same place ────────────────────────────────────
+     A browser wallet, or Google. Everything downstream of here works off an ADDRESS and does
+     not care which door it came through, so both end in adopt().
+
+     WHAT THE EXTENSION DOOR CAN AND CANNOT DO. eth_requestAccounts asks the extension for the
+     visitor's address and nothing else. It hands over no key, and it cannot move funds — a
+     transfer needs a separate eth_sendTransaction that the extension asks about on its own.
+     This page never calls one. The name and forge flows do, and there each transaction is
+     approved individually in the wallet's own window.
+
+     THE GOOGLE DOOR is for the larger number of people who have no extension at all. It
+     produces an address they own, held in a secure enclave, with no seed phrase to lose. See
+     _signer/src/signin.js — the credential for it never reaches the browser. */
+
+  var signedIn = null;                 // {address, email} when the Google door was used
+
+  async function adopt(addr) {
+    wallet = addr || null;
+    if (!wallet) return;
+    foot(); paintAcct();
+    var r = await fetch("/api/nfts?owner=" + wallet);
+      var d = await r.json();
+      nfts = (d && d.nfts) || [];
+
+      // The .agent names this wallet holds. There is no stored NFT->name mapping — what is
+      // true on chain is that the name and the NFT are separate ERC-721s held by the SAME
+      // wallet, which is exactly how zeus was verified. labelOf(tokenId) turns the registry's
+      // one-way keccak id back into a readable label; without it a name is only a hash.
+      try {
+        var nr = await fetch("/api/agent-names?owner=" + wallet);
+        var nd = await nr.json();
+        agentNames = (nd && nd.names) || [];
+      } catch (e) { agentNames = []; }
+
+      foot(); paintNft(agent); paintPending(agent); paintAcct();
+  }
+
+  /* THE THREE DEAD BUTTONS. "Add your agent", "Connect to the Mesh" and the sidebar wallet
+     button all end here, and with no extension present this fell through to the Google door —
+     which Alchemy currently has CLOSED (/api/signin-methods reports google:false, verified
+     2026-09-06). signInWithGoogle then returned without doing anything visible, so all three
+     controls read as broken. In the app they could never have worked at all: a wallet extension
+     injects window.ethereum into a browser TAB and the app's webview never receives it.
+
+     So this routes to whichever door is actually open, and says something when none is. */
+  async function connect() {
+    // In the app there is no extension to ask, so the browser is asked instead. openHandoff
+    // returns true when it managed to open it; anything else falls through to the doors below.
+    if (IN_APP && !window.ethereum && openHandoff()) return;
+    if (window.ethereum) {
+      try {
+        var accts = await window.ethereum.request({ method: "eth_requestAccounts" });
+        await adopt((accts && accts[0]) || null);
+      } catch (e) { /* the visitor closed the wallet prompt — nothing to report */ }
+      return;
+    }
+    if (signInMethods.google) return signInWithGoogle();
+    if (signInMethods.email) {
+      // The email form is already on screen in the sidebar. Take them to it rather than opening
+      // a second copy of it somewhere else.
+      var i = document.querySelector('.wmail input[name="email"]');
+      if (i) { i.scrollIntoView({ block: "center", behavior: "smooth" }); i.focus(); return; }
+    }
+    var host = document.getElementById("wallStatus");
+    if (!host) {
+      host = document.createElement("p");
+      host.id = "wallStatus"; host.className = "wnote";
+      if (footEl) footEl.appendChild(host);
+    }
+    host.textContent = IN_APP
+      ? "No way to sign in is open right now. Open xearn.com in your browser to use a wallet extension."
+      : "No wallet extension found, and no other sign-in is open right now.";
+  }
+
+  /* ── THE BROWSER HANDOFF ───────────────────────────────────────────────────────────
+     Out through Rust (open_external, which will only open our own https URLs), and back over
+     the genie1:// scheme the app registers. Nothing is stored in between and no server is
+     involved: the address rides on the return link.
+
+     An ADDRESS IS NOT A SIGNATURE, and this deliberately does not pretend otherwise. It is
+     enough to read what a wallet holds — the NFTs, the names — which is all this page does
+     with it. Everything that signs still happens in the wallet's own window. */
+  function openHandoff() {
+    var core = window.__TAURI__ && window.__TAURI__.core;
+    if (!core || !core.invoke) return false;
+    core.invoke("open_external", { url: "https://xearn.com/connect-app" }).catch(function () {});
+    var host = document.getElementById("wallStatus");
+    if (!host && footEl) {
+      host = document.createElement("p");
+      host.id = "wallStatus"; host.className = "wnote";
+      footEl.appendChild(host);
+    }
+    if (host) host.textContent = "Opened your browser. Approve there and come back \u2014 " +
+                                "the address arrives on its own.";
+    return true;
+  }
+
+  // The return trip. Every genie1:// link the app receives lands here; only the one carrying an
+  // address does anything, and the address is checked for shape before it is believed.
+  (function () {
+    var ev = window.__TAURI__ && window.__TAURI__.event;
+    if (!ev || !ev.listen) return;
+    ev.listen("deep-link", function (e) {
+      var raw = String((e && e.payload) || "");
+      var m = raw.match(/address=([^&]+)/);
+      if (!m) return;
+      var addr = decodeURIComponent(m[1]);
+      if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) return;
+      adopt(addr);
+    });
+  })();
+
+  // The bundle is ~800KB, which is not something to hand every visitor who only wants to ask a
+  // question. It is fetched the first time somebody chooses this door, and not before.
+  var signerLoading = null;
+  function loadSigner() {
+    if (window.GenieSignIn) return Promise.resolve();
+    if (signerLoading) return signerLoading;
+    signerLoading = new Promise(function (ok, fail) {
+      var t = document.createElement("script");
+      t.src = "/embed/signin.js"; t.async = true;
+      t.onload = ok; t.onerror = function () { signerLoading = null; fail(new Error("load")); };
+      document.head.appendChild(t);
+    });
+    return signerLoading;
+  }
+
+  async function signInWithGoogle() {
+    try {
+      await loadSigner();
+      var u = await window.GenieSignIn.google();
+      signedIn = u;
+      try { localStorage.setItem("og.ask.signedin", "1"); } catch (e) {}
+      await adopt(u.address);
+    } catch (e) {
+      var m = String((e && e.message) || e);
+      // a closed popup is a decision, not a failure
+      if (/cancel|closed|abort/i.test(m)) return;
+      log("sys", "Could not finish signing in. " +
+                 (/load/i.test(m) ? "The sign-in module did not load."
+                                  : "Nothing was created."));
+    }
+  }
+
+  // Somebody who signed in last visit should still be signed in. Silent, and never fatal:
+  // returning null is the normal case for the vast majority of loads.
+  // Which sign-in doors Alchemy has open. Empty until answered, so nothing is drawn on a
+  // guess; when the answer arrives the wallet area is repainted. See /api/signin-methods.
+  var signInMethods = {};
+  function loadSignInMethods() {
+    return fetch("/api/signin-methods")
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var next = (d && d.methods) || {};
+        var changed = JSON.stringify(next) !== JSON.stringify(signInMethods);
+        signInMethods = next;
+        if (changed) foot();
+      })
+      .catch(function () { /* stay with what is drawn */ });
+  }
+
+  async function restoreSignIn() {
+    if (!localStorage.getItem("og.ask.signedin")) return;
+    try {
+      await loadSigner();
+      var u = await window.GenieSignIn.restore();
+      if (u && u.address) { signedIn = u; await adopt(u.address); }
+      else localStorage.removeItem("og.ask.signedin");
+    } catch (e) { /* stay signed out */ }
+  }
+
+  /* ── the account row ────────────────────────────────────────────────
+     Both halves of this row were dead. #acctBtn had no listener at all — the chevron was
+     drawn next to a button nothing was listening to — and acctName / acctSub / acctAv were
+     never written to, so the row read "Guest · Genie 1 · free" with a wallet connected and
+     an agent chosen. Drawing a control that cannot be pressed is worse than omitting it:
+     it tells the visitor the app is broken rather than unfinished.
+
+     The gear beside it is a plain link to /settings and works — but only where /settings
+     resolves. cleanUrls maps settings.html to it on the deployed site; a bare static file
+     server does not, which is why it 404s when the page is opened from one. */
+  // THE APP AND THE TAB RUN THE SAME FILE. The desktop build stamps data-app on <html>
+  // (tools/appify_paths.py) rather than string-patching this script, because a build-time
+  // find-and-replace goes silently stale the moment the line it matched is edited — which is
+  // exactly what happened: "Get the app" kept shipping inside the app for that reason.
+  var IN_APP = document.documentElement.hasAttribute("data-app");
+
+  if (IN_APP) {
+    var wl = document.getElementById("wLocal");
+    if (wl) {
+      wl.querySelector("p").innerHTML =
+        "You are running it. This build answers on your machine with <b>no daily cap</b>, " +
+        "and nothing leaves it.";
+      var dl = wl.querySelector(".w-dl"); if (dl) dl.remove();
+    }
+  }
+
+  function shortAddr(a) { return a.slice(0, 6) + "\u2026" + a.slice(-4); }
+
+  function paintAcct() {
+    var nEl = document.getElementById("acctName"),
+        sEl = document.getElementById("acctSub"),
+        aEl = document.getElementById("acctAv");
+    if (!nEl) return;
+    var name = "Guest", sub = "Genie 1 \u00b7 free", img = null;
+    if (wallet) {
+      // A single .agent name on the wallet is unambiguous, so it can label the account. More
+      // than one and it cannot — the name and the NFT are separate tokens that only share a
+      // holder, so guessing which name goes with which agent would be inventing a binding.
+      var only = agentNames.length === 1 ? agentNames[0].name : null;
+      name = (agent && agent.name) || (only ? only + ".agent" : shortAddr(wallet));
+      sub  = agent ? shortAddr(wallet) : "Connected \u00b7 pick an agent";
+      img  = agent && agent.image;
+    }
+    nEl.textContent = name;
+    sEl.textContent = sub;
+    aEl.innerHTML = img ? '<img alt="" src="' + img + '" style="width:100%;height:100%;' +
+                          'border-radius:50%;object-fit:cover">' : "";
+  }
+
+  var acctBtn = document.getElementById("acctBtn");
+  if (acctBtn) acctBtn.addEventListener("click", function (e) {
+    e.stopPropagation();
+    var r = acctBtn.getBoundingClientRect();
+    // WHOSE ACCOUNT THIS IS, FIRST. A menu that opens straight into actions makes you work out
+    // which account you are acting on. The header answers it before the first row: the
+    // signed-in email, or the .agent name, or the address, or plainly that nobody is signed in.
+    var who = (signedIn && signedIn.email)
+            || namesOn(agent)[0]
+            || (agentNames.length === 1 ? agentNames[0].name : null)
+            || (wallet ? shortAddr(wallet) : "Not signed in");
+
+    // WHAT IS ALREADY ON SCREEN DOES NOT GO IN THE MENU. The sign-in block — the email pair
+    // and the "Connect a wallet" button — is rendered by foot() in this same sidebar, a few
+    // pixels under this row. Repeating it here put the same control on screen twice and made
+    // the menu read as a nag rather than as an account. A menu is for what the page cannot
+    // show you: where you are signed in, what else you could be, and where the settings live.
+    //
+    // So the rows are GROUPED and each group earns its place. `sub` heads name the group;
+    // an empty group collapses on its own because its rows are falsy.
+    var canPick = wallet && nfts.length > 0;
+    var canName = wallet && agentNames.length > 1;
+
+    menuAt(r.left, r.top - 6, [
+      { head: who },
+      !wallet && signInMethods.google && { t: "Continue with Google", icon: "agent", fn: signInWithGoogle },
+
+      (canPick || canName) && { sep: true },
+      (canPick || canName) && { head: "Agent" },
+      canPick && { t: agent ? "Switch agent" : "Choose an agent", icon: "agent",
+                   fn: function () { pick(r.left, r.top - 6); } },
+      // The name chips live in the agents panel, so this takes you there rather than opening a
+      // second place to manage them. Clicking the rail button is the same path a person takes.
+      canName && { t: "Names on this agent", icon: "packs", fn: function () {
+        var rb = document.querySelector('.rail-nav .rail[data-view="agents"]');
+        if (rb) rb.click();
+        paintNames(agent);
+      } },
+
+      { sep: true },
+      { head: "Genie" },
+      { t: "Settings & usage", icon: "gear", href: IN_APP ? "settings.html" : "/settings",
+        key: "\u2318," },
+      // Offering the download to someone standing inside the app is the app telling them to go
+      // get the app. IN_APP is stamped on <html> by the build, so the same source serves both.
+      !IN_APP && { t: "Get the app", icon: "download", href: "/#download" },
+
+      wallet && { sep: true },
+      wallet && { t: "Disconnect", icon: "exit", danger: true, fn: function () {
+        wallet = null; nfts = []; agentNames = [];
+        // A Google session outlives a page reload, so forgetting the address without ending
+        // the session would sign the visitor straight back in on the next load.
+        if (signedIn) {
+          signedIn = null;
+          try { localStorage.removeItem("og.ask.signedin"); } catch (e) {}
+          if (window.GenieSignIn) window.GenieSignIn.disconnect();
+        }
+        foot(); paintNft(agent); paintPending(agent); paintAcct();
+      } },
+    ], true);
+  });
+
+  /* ── boot ───────────────────────────────────────────────────────────── */
+  try { agent = JSON.parse(localStorage.getItem(AGENT_KEY) || "null"); } catch (e) { agent = null; }
+  if (searchEl) searchEl.addEventListener("input", render);
+  var nb = document.getElementById("newChat"); if (nb) nb.addEventListener("click", newChat);
+  var cc = document.getElementById("ctaConnect");
+  if (cc) cc.addEventListener("click", function () { wallet ? pick(20, innerHeight - 120) : connect(); });
+  var na = document.getElementById("nftAdd");
+  if (na) na.addEventListener("click", function () { wallet ? pick(na.getBoundingClientRect().left,
+        na.getBoundingClientRect().bottom + 260) : connect(); });
+  load(); render(); foot(); hook(); paintNft(agent); paintPending(agent); paintAcct();
+  loadSignInMethods();
+  restoreSignIn();
+  window.addEventListener("load", hook);
+})();
+</script>
+
+<script>
+/* ═══ MODEL PICKER + BYOK ════════════════════════════════════════════════════════════════
+   WHERE A KEY LIVES, AND WHERE IT NEVER GOES
+   A user's API key gets the same care as our own. This project's own rule is already written
+   down in the plugin's byok.json — "presence flags only. Never key values." So:
+
+     · the key is written to THIS BROWSER's localStorage and nowhere else
+     · it is never sent to us to store, never logged, never inscribed
+     · on a request it is attached as a header, used once, and discarded
+
+   The page says that in plain words next to the field, because a person handing over a key
+   deserves to know where it goes before they paste it, not after.
+   ════════════════════════════════════════════════════════════════════════════════════════ */
+(function () {
+  var MK = "og.ask.model", KK = "og.ask.keys";
+  var MODELS = [
+    { id: "genie-1",   name: "Genie 1",        note: "Free \u00B7 grounded in the Mesh \u00B7 daily limit" },
+    { id: "local",     name: "Genie 1 local",  note: "Unlimited \u00B7 runs on your machine \u00B7 nothing leaves it" },
+    { id: "anthropic", name: "Claude",         note: "Your own key", byok: true },
+    { id: "openai",    name: "GPT",            note: "Your own key", byok: true },
+    { id: "groq",      name: "Llama on Groq",  note: "Your own key", byok: true },
+  ];
+  var keys = {};
+  try { keys = JSON.parse(localStorage.getItem(KK) || "{}"); } catch (e) { keys = {}; }
+  var cur = localStorage.getItem(MK) || "genie-1";
+
+  var btn = document.getElementById("modelBtn"), nameEl = document.getElementById("modelName");
+  if (!btn) return;
+
+  function model() { return MODELS.filter(function (m) { return m.id === cur; })[0] || MODELS[0]; }
+  function paint() { if (nameEl) nameEl.innerHTML = model().name.replace(" ", "&nbsp;"); }
+  function usable(m) { return !m.byok || !!keys[m.id]; }
+
+  function open() {
+    document.querySelectorAll(".mpop").forEach(function (x) { x.remove(); });
+    var r = btn.getBoundingClientRect();
+    var pop = document.createElement("div");
+    pop.className = "mpop";
+    pop.style.left = Math.max(10, r.left) + "px";
+    pop.style.bottom = (innerHeight - r.top + 8) + "px";
+
+    var hd = document.createElement("div"); hd.className = "hd"; hd.textContent = "Model";
+    pop.appendChild(hd);
+
+    MODELS.forEach(function (m) {
+      var row = document.createElement("button"); row.type = "button";
+      row.className = "mrow" + (usable(m) ? "" : " need");
+      var tick = document.createElement("span"); tick.className = "tick";
+      tick.textContent = m.id === cur ? "\u2713" : "";
+      var mi = document.createElement("span"); mi.className = "mi";
+      var b = document.createElement("b"); b.textContent = m.name;
+      var i = document.createElement("i");
+      i.textContent = m.byok && !keys[m.id] ? "Add a key to use this" : m.note;
+      mi.appendChild(b); mi.appendChild(i);
+      row.appendChild(tick); row.appendChild(mi);
+      row.onclick = function (e) {
+        e.stopPropagation();
+        if (m.byok && !keys[m.id]) { keyField(pop, m); return; }
+        cur = m.id; localStorage.setItem(MK, cur); paint(); pop.remove();
+      };
+      pop.appendChild(row);
+    });
+
+    var add = document.createElement("button"); add.type = "button"; add.className = "mrow";
+    add.innerHTML = '<span class="tick">+</span><span class="mi"><b>Add an API key</b>' +
+                    '<i>Use your own account instead of ours</i></span>';
+    add.onclick = function (e) { e.stopPropagation(); keyField(pop, null); };
+    pop.appendChild(add);
+
+    document.body.appendChild(pop);
+    setTimeout(function () {
+      document.addEventListener("click", function once() { pop.remove(); document.removeEventListener("click", once); });
+    }, 0);
+  }
+
+  function keyField(pop, forModel) {
+    var old = pop.querySelector(".keybox"); if (old) old.remove();
+    var box = document.createElement("div"); box.className = "keybox";
+    box.onclick = function (e) { e.stopPropagation(); };
+
+    var lab = document.createElement("label");
+    lab.textContent = forModel ? (forModel.name + " key") : "Provider key";
+    var sel = null;
+    if (!forModel) {
+      sel = document.createElement("select");
+      sel.style.cssText = "width:100%;margin-bottom:8px;padding:8px;background:#0e0e11;" +
+        "border:1px solid var(--line);border-radius:8px;color:var(--text);font-size:12px";
+      MODELS.filter(function (m) { return m.byok; }).forEach(function (m) {
+        var o = document.createElement("option"); o.value = m.id; o.textContent = m.name; sel.appendChild(o);
+      });
+    }
+    var inp = document.createElement("input");
+    inp.type = "password"; inp.placeholder = "sk-\u2026"; inp.autocomplete = "off"; inp.spellcheck = false;
+    var save = document.createElement("button"); save.className = "save"; save.type = "button";
+    save.textContent = "Save key";
+    var note = document.createElement("p"); note.className = "note";
+    note.innerHTML = "The key is saved <b>in this browser only</b>. We never store it, never log " +
+                     "it, and it is not sent anywhere except to the provider to answer you.";
+
+    save.onclick = function () {
+      var id = forModel ? forModel.id : sel.value;
+      var v = inp.value.trim(); if (!v) return;
+      keys[id] = v;
+      try { localStorage.setItem(KK, JSON.stringify(keys)); } catch (e) {}
+      cur = id; localStorage.setItem(MK, cur); paint(); pop.remove();
+    };
+
+    box.appendChild(lab); if (sel) box.appendChild(sel);
+    box.appendChild(inp); box.appendChild(save); box.appendChild(note);
+    pop.appendChild(box); inp.focus();
+  }
+
+  btn.addEventListener("click", function (e) { e.stopPropagation(); open(); });
+  paint();
+
+  // Hand the choice to the send path, and the key with it — per request, never stored by us.
+  window.__genieModel = function () { return { model: cur, key: keys[cur] || "", all: keys }; };
+})();
+</script>
+
+<script>
+/* ═══ RICH REPLIES ═══════════════════════════════════════════════════════════════════════
+   Genie answers in markdown like every other model, so the page has to render it: headings,
+   bold, lists, code, and real links.
+
+   IT BUILDS DOM NODES, IT NEVER SETS innerHTML FROM THE MODEL.
+   A reply is untrusted text — it can contain anything, including text a user talked the model
+   into producing. Assigning it to innerHTML is the whole XSS class in one line. Everything
+   here is createElement + textContent, so the worst a hostile reply can do is look odd.
+
+   Links are rebuilt from scratch: http/https only (no javascript:, no data:), and every one
+   gets rel="noopener noreferrer" so the target cannot touch this tab.
+   ════════════════════════════════════════════════════════════════════════════════════════ */
+(function () {
+  function safeHref(u) {
+    try {
+      var url = new URL(u, location.origin);
+      return (url.protocol === "http:" || url.protocol === "https:") ? url.href : null;
+    } catch (e) { return null; }
+  }
+
+  // inline: `code`, **bold**, *italic*, [text](url), and bare urls
+  function inline(el, text) {
+    var re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\n]+\*)|(\[[^\]]+\]\([^)\s]+\))|(https?:\/\/[^\s<>()]+)/g;
+    var last = 0, m;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > last) el.appendChild(document.createTextNode(text.slice(last, m.index)));
+      var t = m[0], node;
+      if (m[1])      { node = document.createElement("code"); node.textContent = t.slice(1, -1); }
+      else if (m[2]) { node = document.createElement("b");    node.textContent = t.slice(2, -2); }
+      else if (m[3]) { node = document.createElement("em");   node.textContent = t.slice(1, -1); }
+      else if (m[4]) {
+        var mm = /\[([^\]]+)\]\(([^)\s]+)\)/.exec(t), href = safeHref(mm[2]);
+        if (href) { node = document.createElement("a"); node.href = href; node.textContent = mm[1]; }
+        else      { node = document.createTextNode(mm[1]); }
+      } else {
+        var h = safeHref(m[5]);
+        if (h) { node = document.createElement("a"); node.href = h; node.textContent = m[5]; }
+        else   { node = document.createTextNode(m[5]); }
+      }
+      if (node.tagName === "A") { node.target = "_blank"; node.rel = "noopener noreferrer"; }
+      el.appendChild(node);
+      last = m.index + t.length;
+    }
+    if (last < text.length) el.appendChild(document.createTextNode(text.slice(last)));
+  }
+
+  function render(md) {
+    var wrap = document.createElement("div");
+    wrap.className = "md";
+    var lines = String(md).split("\n"), i = 0, list = null;
+
+    function endList() { list = null; }
+
+    while (i < lines.length) {
+      var ln = lines[i];
+
+      if (/^```/.test(ln)) {                                   // fenced code
+        endList();
+        var buf = [];
+        i++;
+        while (i < lines.length && !/^```/.test(lines[i])) { buf.push(lines[i]); i++; }
+        i++;
+        var pre = document.createElement("pre"), code = document.createElement("code");
+        code.textContent = buf.join("\n");                      // never parsed, only shown
+        pre.appendChild(code); wrap.appendChild(pre);
+        continue;
+      }
+      var h = /^(#{1,3})\s+(.*)$/.exec(ln);
+      if (h) { endList();
+        var hx = document.createElement("h" + (h[1].length + 2));
+        inline(hx, h[2]); wrap.appendChild(hx); i++; continue; }
+
+      var li = /^\s*[-*]\s+(.*)$/.exec(ln) || /^\s*(\d+)\.\s+(.*)$/.exec(ln);
+      if (li) {
+        var ordered = !!li[2];
+        if (!list || list.tagName !== (ordered ? "OL" : "UL")) {
+          list = document.createElement(ordered ? "ol" : "ul"); wrap.appendChild(list);
+        }
+        var item = document.createElement("li");
+        inline(item, ordered ? li[2] : li[1]);
+        list.appendChild(item); i++; continue;
+      }
+      if (!ln.trim()) { endList(); i++; continue; }
+
+      endList();
+      var para = document.createElement("p");
+      inline(para, ln);
+      wrap.appendChild(para); i++;
+    }
+    return wrap;
+  }
+
+  // wrap log() so only Genie's side gets rendered; what the user typed stays literal text
+  function hook() {
+    if (typeof window.log !== "function" || window.log.__md) return;
+    var orig = window.log;
+    window.log = function (cls, text) {
+      if (cls !== "face") return orig.apply(this, arguments);
+      // PASS THE REAL TEXT DOWN. This used to call orig with "" and then paint the markdown
+      // into the DOM itself — but the wrapper underneath is the thread STORE, so every Genie
+      // reply was saved as an empty string. The user's side survived a reload and Genie's
+      // side came back blank, and there was nothing for Settle to write to the Mesh. The DOM
+      // is a view; handing the store an empty view is how the record gets lost.
+      orig.call(this, cls, text);
+      var host = document.getElementById("log");
+      var line = host && host.lastChild;
+      if (!line) return;
+      line.textContent = "";
+      line.appendChild(render(text));
+    };
+    // TWO WRAPPERS SHARE THIS FUNCTION — the thread store and this renderer — and each guards
+    // against installing twice with its own flag. A wrapper must therefore CARRY THROUGH the
+    // flags of whatever it wrapped: the flags describe the chain, not the outermost link.
+    // Claiming the other's flag makes this look like the store and the store never installs;
+    // dropping it makes the store think it has not run and install a second time, which
+    // pushed every message to the thread twice. Inherit, never claim and never drop.
+    window.log.__md = true;
+    if (orig.__wrapped) window.log.__wrapped = true;
+  }
+  hook(); window.addEventListener("load", hook);
+})();
+</script>
+
+<script>
+/* WISH LIST + FEATURED COLLECTION.
+   The wish list is names someone wants but has not claimed. It lives in this browser — there
+   is no account to hang it on — and each row links straight into the claim flow with the name
+   already filled, so wanting it and getting it are one click apart. */
+(function () {
+  var WK = "og.ask.wishes";
+  var list = []; try { list = JSON.parse(localStorage.getItem(WK) || "[]"); } catch (e) {}
+  if (!Array.isArray(list)) list = [];
+  var host = document.getElementById("wishes"), form = document.getElementById("wishForm"),
+      input = document.getElementById("wishInput");
+
+  function save() { try { localStorage.setItem(WK, JSON.stringify(list.slice(0, 40))); } catch (e) {} }
+
+  function render() {
+    if (!host) return;
+    host.innerHTML = "";
+    if (!list.length) {
+      var e = document.createElement("p"); e.className = "wish-empty";
+      e.textContent = "Names you want, kept here until you claim them.";
+      host.appendChild(e); return;
+    }
+    list.forEach(function (w, idx) {
+      var row = document.createElement("div"); row.className = "wish";
+      var nm = document.createElement("div"); nm.className = "nm";
+      nm.textContent = w; var dot = document.createElement("em"); dot.textContent = ".agent";
+      nm.appendChild(dot);
+      var go = document.createElement("a"); go.textContent = "Claim";
+      go.href = "/agent?name=" + encodeURIComponent(w);
+      var x = document.createElement("button"); x.className = "x"; x.type = "button";
+      x.textContent = "\u00D7"; x.setAttribute("aria-label", "Remove");
+      x.onclick = function () { list.splice(idx, 1); save(); render(); };
+      row.appendChild(nm); row.appendChild(go); row.appendChild(x);
+      host.appendChild(row);
+    });
+  }
+
+  if (form) form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    // Same shape the registry accepts, so a wish cannot be a name that could never be claimed.
+    var v = (input.value || "").trim().toLowerCase().replace(/[^a-z0-9-]/g, "");
+    if (!v || list.indexOf(v) > -1) { input.value = ""; return; }
+    list.unshift(v); save(); render(); input.value = "";
+  });
+  render();
+
+  // The featured-collection fetch that used to close this block was removed when that strip
+  // became static markup — but its TAIL was left behind (`rail.hidden = false; }).catch(...)`)
+  // with nothing opening it. That is a PARSE error, not a runtime one, so it killed the whole
+  // script block: the wish list above never ran on the site at all. Found by node --check on
+  // every inline block; worth keeping in the build check for exactly this reason.
+})();
+</script>
+
+<script>
+/* ═══ RAIL: ONE VIEW AT A TIME ═══════════════════════════════════════════════════════════
+   The right panel used to show the agent, bounties, the wish list and the featured collection
+   all stacked at once, which is why it read as a pile rather than a tool. The rail picks one.
+
+   The four views are not arbitrary — they are the four things holding an agent is FOR:
+     Agents      who is answering, and switching between the NFTs you hold
+     Skill packs what this agent knows, drawn from the Mesh
+     Bounties    work you can take, and work you are owed
+     Earnings    what it made, and settling that to the chain
+   ════════════════════════════════════════════════════════════════════════════════════════ */
+(function () {
+  var VIEWS = {
+    agents:   ["nftAdd", "nftBox", "nftTraits", "collRail"],
+    skills:   ["skillsRail"],
+    bounties: ["pendingRail", "bountiesRail", "wishRail"],
+    earnings: ["ledgerCta", "ledgerReal"],
+  };
+  // Tag the existing rails so they can be shown and hidden as groups.
+  var panel = document.querySelector(".pane.face .body");
+  if (!panel) return;
+  var rails = panel.querySelectorAll(".rail");           // section blocks, not the nav buttons
+  function byHeading(txt) {
+    return Array.prototype.filter.call(panel.querySelectorAll(".rail"), function (r) {
+      var h = r.querySelector("h3");
+      return h && h.textContent.trim().toLowerCase().indexOf(txt) === 0;
+    })[0];
+  }
+  var map = {
+    pendingRail:   byHeading("pending"),
+    bountiesRail:  byHeading("open bounties"),
+    wishRail:      document.getElementById("wishRail"),
+    ledgerCta:     document.getElementById("ledgerCta"),
+    ledgerReal:    document.getElementById("ledgerReal"),
+    collRail:      byHeading("featured"),
+    nftAdd:        document.getElementById("nftAdd"),
+    nftBox:        document.getElementById("nftBox"),
+    nftTraits:     document.getElementById("nftTraits"),
+  };
+
+  // ── Skill packs ──────────────────────────────────────────────────────────────────────
+  // These eight are not invented here. They are the SAME ids the payment tiers key on
+  // (server.js `pack_*`), which is what the grant worker inscribes to the buyer's agent, so a
+  // pack shown here and a pack bought on the Bazaar are the same object. Names and blurbs are
+  // copied from that definition; if a pack is added there, add it here — a hard-coded list that
+  // silently disagrees with the tier table would sell a pack that cannot be granted.
+  //
+  // No emoji: the Bazaar's own cards carry one each, and they do not come across to an AUTO site.
+  var PACKS = [
+    ["pack_pm",           "Certified Project Manager",
+     "Google PM certs, Anthropic training and Lean Six Sigma, wrapped into one PM agent."],
+    ["pack_pm_marketing", "PM + Marketing Manager",
+     "The PM pack plus marketing and sales craft harvested from real campaigns."],
+    ["pack_videogenie",   "VideoGenie",
+     "Watches YouTube, pulls the signal, pushes it where you read it."],
+    ["pack_concierge",    "Meeting Concierge",
+     "Records and transcribes on-device, then emails a branded report with action items."],
+    ["pack_pip",          "Trademark Your Style",
+     "Turns your prompts and art style into an owned PIP that earns when others use it."],
+    ["pack_derivative",   "Derivative Generator",
+     "Your community makes new work in your style, and you are paid on every generation."],
+    ["pack_safu",         "Crypto Safu Scout",
+     "Contract mechanics plus the funder-graph trace. Reads the ledger, not the candle."],
+    ["pack_xgrowth",      "X Growth Agent",
+     "Runs your X through the official API only, and mines your DMs for real leads."],
+  ];
+  var BAZAAR = "https://scan.orangegenie.bot/orangescan";
+
+  var skills = document.createElement("div");
+  skills.className = "rail"; skills.id = "skillsRail";
+  skills.innerHTML =
+    '<h3>Skill packs</h3>' +
+    '<p class="foot">Buy the expertise instead of training it. Each pack is a bundle of skills ' +
+    'on the Mesh; buying one inscribes them to your agent, authored by your agent.</p>' +
+    '<div class="packs">' +
+      PACKS.map(function (k) {
+        return '<a class="pack" href="' + BAZAAR + '#' + k[0] + '" target="_blank" rel="noopener">' +
+                 '<b>' + k[1] + '</b><span>' + k[2] + '</span></a>';
+      }).join("") +
+    '</div>' +
+    '<p class="foot">Individual skills stay free to recall. A pack is priced by the market &mdash; ' +
+    'the first buyer sets the floor.</p>';
+  panel.appendChild(skills); map.skillsRail = skills;
+
+  var current = "agents";
+  function show(view) {
+    current = view;
+    Object.keys(VIEWS).forEach(function (v) {
+      VIEWS[v].forEach(function (id) {
+        var el = map[id]; if (!el) return;
+        var on = (v === view);
+        // The agent views manage their own hidden state (bound vs not) — never force those on.
+        // These four know whether they belong on screen (agent bound? wallet connected?).
+        // The switcher decides which GROUP is live; they decide which of themselves shows.
+        var selfManaged = (id === "nftBox" || id === "nftTraits" || id === "nftAdd" ||
+                           id === "ledgerCta" || id === "ledgerReal");
+        el.hidden = !on;
+        if (on && selfManaged) el.dataset.viewOn = "1"; else delete el.dataset.viewOn;
+      });
+    });
+    // let the agent/ledger painters re-assert their own correct state
+    if (window.__paintAgentState) window.__paintAgentState();
+    document.querySelectorAll(".rail-nav .rail").forEach(function (b) {
+      b.classList.toggle("on", b.getAttribute("data-view") === view);
+    });
+  }
+  document.querySelectorAll(".rail-nav .rail").forEach(function (b) {
+    b.addEventListener("click", function () { show(b.getAttribute("data-view")); });
+  });
+  show("agents");
+  window.__railView = function () { return current; };
+})();
+</script>
+</body>
+</html>

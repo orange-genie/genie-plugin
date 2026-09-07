@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the bundled page is allowed to ask the app for. Tauri v2 denies anything not named here, which is the point \u2014 the page ships inside the app, but it is still the least-trusted part of it.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "deep-link:default",
+    "core:window:allow-set-focus"
+  ]
+}

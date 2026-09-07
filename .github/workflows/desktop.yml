@@ -1,0 +1,89 @@
+# Genie 1 desktop — build macOS, Windows and Linux from one source, in one run.
+#
+# WHY THIS EXISTS: the three download buttons on xearn.com resolve through /api/download, which
+# asks the GitHub releases API for an asset matching the caller's platform. Until a release
+# carries all three, two of those buttons honestly answer 503 — so the buttons are not blocked on
+# the website, they are blocked on these artifacts. A Mac cannot cross-compile the other two.
+#
+# Trigger it by pushing a v* tag, or by hand from the Actions tab against an existing tag.
+name: desktop
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to attach the builds to (e.g. v0.2.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      # fail-fast off, deliberately: one platform failing to compile should still land the other
+      # two. A release with two of three working beats a release with none.
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: universal-apple-darwin
+            args: "--target universal-apple-darwin"
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            args: ""
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            args: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Linux build dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
+                                  patchelf libssl-dev build-essential curl wget file
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # The macOS job needs BOTH arches present or the universal build fails at the lipo step
+          # with a target that was never compiled.
+          targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app/tauri
+
+      - name: Build
+        working-directory: app/tauri
+        run: |
+          cargo install tauri-cli --version "^2" --locked
+          cargo tauri build ${{ matrix.args }}
+
+      # Collected by extension rather than by exact filename: Tauri's bundle names carry the
+      # version and the arch, so a hardcoded path silently stops matching on the next bump and
+      # the upload step finds nothing while still reporting success.
+      - name: Collect installers
+        shell: bash
+        run: |
+          mkdir -p out
+          find app/tauri/target -type f \
+            \( -name "*.dmg" -o -name "*.msi" -o -name "*.exe" \
+               -o -name "*.AppImage" -o -name "*.deb" \) \
+            -not -path "*/deps/*" -print0 | while IFS= read -r -d '' f; do
+              cp "$f" out/
+            done
+          ls -lh out
+
+      - name: Attach to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: out/*
+          fail_on_unmatched_files: true

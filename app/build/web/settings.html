@@ -1,0 +1,1136 @@
+<!doctype html>
+<html data-app="1" lang="en">
+<head>
+<script>
+(function () {
+  var core = window.__TAURI__ && window.__TAURI__.core;
+  var orig = window.fetch ? window.fetch.bind(window) : null;
+
+  // Header objects reach fetch in three shapes and all three are used on this page.
+  function flat(h) {
+    var out = {};
+    if (!h) return out;
+    if (typeof Headers !== "undefined" && h instanceof Headers) {
+      h.forEach(function (v, k) { out[k] = v; });
+    } else if (Array.isArray(h)) {
+      h.forEach(function (p) { out[p[0]] = p[1]; });
+    } else {
+      Object.keys(h).forEach(function (k) { out[k] = h[k]; });
+    }
+    return out;
+  }
+
+  window.fetch = function (input, init) {
+    var url = (typeof input === "string") ? input : (input && input.url) || "";
+    if (url.indexOf("/api/") !== 0 || !core || !core.invoke) {
+      return orig ? orig(input, init) : Promise.reject(new Error("no fetch"));
+    }
+    init = init || {};
+    return core.invoke("api_fetch", {
+      path: url,
+      method: (init.method || "GET").toUpperCase(),
+      body: (typeof init.body === "string") ? init.body : null,
+      headers: flat(init.headers)
+    }).then(function (r) {
+      return new Response(r.body, {
+        status: r.status,
+        headers: { "content-type": r.content_type || "application/json" }
+      });
+    }).catch(function (e) {
+      // A refusal from the shim must look like a failed request, not a thrown page.
+      return new Response(JSON.stringify({ ok: false, error: String(e) }),
+                          { status: 502, headers: { "content-type": "application/json" } });
+    });
+  };
+})();
+</script>
+
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings &amp; usage &mdash; Genie</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600;700&family=Space+Mono&display=swap" rel="stylesheet">
+<style>
+/* Tokens from ~/Genie/brand/tokens.json. Black and orange is the signature.
+   Blue is the only cool note. No emojis — standing order, real marks only. */
+:root{
+  --bg:#0a0a0a; --ground:#08080a; --line:#1c1c20; --line2:#262626;
+  --orange:#f76b00; --orangeHi:#ff8a1e; --warm:#ffc27a; --dim:#8a3d00;
+  --green:#8fe814;
+  --blue:#6b9fff; --text:#f2f2f2; --muted:#8a8a8a; --faint:#5f5f66;
+  --sans:Inter,system-ui,-apple-system,sans-serif;   /* UI, body, numbers */
+  --mono:'Space Mono',ui-monospace,monospace;        /* uppercase labels only */
+  --display:Inter,system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg);color:var(--text);
+          font-family:var(--sans);font-size:14px}
+/* One viewport. Nothing here is a scroll target except the three columns,
+   which scroll inside themselves. */
+body{display:flex;flex-direction:column;overflow:hidden}
+button,input{font-family:var(--sans);font-size:14px}
+::selection{background:var(--dim);color:#fff}
+
+header{flex:none;display:flex;align-items:baseline;gap:20px;padding:13px 26px;
+       border-bottom:1px solid var(--line)}
+.mark{font-family:var(--display);font-weight:700;font-size:19px;letter-spacing:-0.2px;line-height:1}
+.mark i{font-style:normal;color:var(--orange)}
+.tag{font-family:var(--mono);font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--faint)}
+.tag b{color:var(--muted);font-weight:400}
+
+main{flex:1;min-height:0;display:grid;
+     grid-template-columns:264px minmax(0,1fr) 296px}
+.pane{min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.pane.hist{border-right:1px solid var(--line)}
+.pane.face{border-left:1px solid var(--line)}
+.pane>.body{flex:1;min-height:0;overflow-y:auto;padding:16px 18px}
+h2{font-family:var(--mono);font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--faint);
+   padding:14px 18px 0;flex:none}
+
+/* ── left: what this Face has been taught ───────────────────────────── */
+.hitem{border-left:2px solid var(--line2);padding:7px 0 7px 11px;margin-bottom:11px;
+       cursor:pointer}
+.hitem:hover{border-left-color:var(--muted)}
+.hitem.minted{border-left-color:var(--orange)}
+.hitem .q{font-size:12px;line-height:1.45;color:var(--muted);
+          display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.hitem .s{font-family:var(--mono);font-size:10px;letter-spacing:2px;text-transform:uppercase;
+          color:var(--faint);margin-top:4px}
+.hitem.minted .s{color:var(--orange)}
+.empty{font-size:12px;line-height:1.6;color:var(--faint)}
+
+/* ── centre: the conversation ───────────────────────────────────────── */
+.pane.chat>.body{padding:18px 26px}
+.line{line-height:1.6;max-width:74ch;margin-bottom:13px}
+.line.you{color:var(--muted)}
+.line.you::before{font-family:var(--mono);content:'you  ';color:var(--faint);font-size:11px;letter-spacing:2px}
+.line.face{color:var(--green)}
+.line.sys{color:var(--faint);font-size:12px;line-height:1.55}
+.line.sys.mint{color:var(--orange)}
+.ask{flex:none;display:flex;gap:10px;padding:14px 26px 18px;
+     border-top:1px solid var(--line)}
+.ask input{flex:1;background:var(--ground);border:1px solid var(--line2);border-radius:10px;
+           color:var(--text);padding:12px 14px;outline:none}
+.ask input:focus{border-color:var(--dim)}
+.go{font-family:var(--mono);background:var(--orange);border:0;border-radius:10px;color:#000;padding:12px 24px;
+    cursor:pointer;text-transform:uppercase;letter-spacing:2px;font-size:11px}
+.go:hover{background:var(--orangeHi)}
+.go:disabled{background:#1a1a1e;color:var(--faint);cursor:default}
+
+/* ── right: the Face ────────────────────────────────────────────────── */
+/* The canonical OG screen — scanlines, vignette, orange bloom. Lifted verbatim
+   from og-brand/genie-live.html by way of royalty/build_wildflower.py. This is
+   the signature CRT surface; it is not restyled per page. */
+.screen{position:relative;width:100%;max-width:210px;aspect-ratio:1/1;
+  overflow:hidden;border-radius:18px;
+  background:radial-gradient(140% 140% at 50% 28%,#181513,#0a0a0c 72%);
+  border:1px solid var(--line2);
+  box-shadow:0 0 70px -26px rgba(247,107,0,.42),inset 0 0 70px rgba(0,0,0,.7)}
+.screen::before{content:"";position:absolute;inset:0;border-radius:18px;pointer-events:none;z-index:3;
+  background:repeating-linear-gradient(0deg,rgba(247,107,0,.05) 0 1px,transparent 1px 3px)}
+.screen::after{content:"";position:absolute;inset:0;border-radius:18px;pointer-events:none;z-index:3;
+  box-shadow:inset 0 0 90px rgba(0,0,0,.55)}
+#genieCanvas{position:absolute;inset:0;width:100%;height:100%;z-index:1}
+.slug{font-family:var(--mono);position:absolute;top:11px;left:13px;z-index:4;font-size:9px;letter-spacing:2px;
+      color:var(--orange);display:flex;align-items:center;gap:7px}
+.slug .dot{width:5px;height:5px;border-radius:50%;background:var(--orange);
+           box-shadow:0 0 9px var(--orange);animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.4;transform:scale(.85)}50%{opacity:1;transform:scale(1)}}
+@media(prefers-reduced-motion:reduce){.slug .dot{animation:none;opacity:.9}}
+.step{position:absolute;top:9px;right:9px;z-index:4;display:flex;gap:4px}
+.step button{background:rgba(0,0,0,.55);border:1px solid var(--line2);color:var(--muted);
+             width:26px;height:26px;border-radius:7px;cursor:pointer;line-height:1;font-size:12px}
+.step button:hover{color:var(--orange);border-color:var(--dim)}
+.step button:focus-visible{outline:2px solid var(--orange);outline-offset:2px}
+
+.no{font-family:var(--display);font-weight:700;font-size:30px;line-height:1;
+    letter-spacing:-1px;margin:14px 0 10px}
+.spec{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);
+      border:1px solid var(--line)}
+.spec>div{background:var(--bg);padding:7px 10px}
+.spec dt{font-family:var(--mono);font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--faint)}
+.spec dd{margin-top:3px;font-size:13px}
+.spec dd em{font-style:normal;color:var(--faint);margin-left:5px;font-size:11px}
+
+.rail{border-top:1px solid var(--line);margin-top:16px;padding-top:14px}
+.rail h3{font-family:var(--mono);font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--faint);
+         margin-bottom:10px}
+.figure{font-family:var(--display);font-weight:700;font-size:28px;line-height:1;letter-spacing:-1px;
+        color:var(--orange)}
+.figure em{font-family:var(--mono);font-style:normal;font-size:11px;color:var(--faint);
+           letter-spacing:2px;margin-left:7px}
+.kv{display:flex;justify-content:space-between;padding:5px 0;font-size:12px;color:var(--muted)}
+.kv b{color:var(--text);font-weight:400}
+.settle{font-family:var(--mono);width:100%;margin-top:12px;background:transparent;border:1px solid var(--line2);
+        border-radius:9px;color:var(--muted);padding:11px;cursor:pointer;
+        text-transform:uppercase;letter-spacing:2px;font-size:11px}
+.settle:hover{border-color:var(--orange);color:var(--orange)}
+.settle:disabled{color:var(--faint);border-color:var(--line);cursor:default}
+.foot{font-size:11px;line-height:1.6;color:var(--faint);margin-top:9px}
+.foot b{color:var(--muted);font-weight:400}
+.bounty{border-left:2px solid var(--dim);padding:5px 0 5px 10px;margin-bottom:9px}
+.bounty.done{border-left-color:var(--line2);opacity:.45}
+.bounty p{line-height:1.45;color:var(--muted);font-size:11px}
+.bounty .r{font-family:var(--display);font-weight:700;font-size:14px;color:var(--orange);letter-spacing:-0.2px}
+.bounty.done .r{color:var(--faint)}
+
+@media(max-width:960px){
+  body{overflow:auto}
+  main{grid-template-columns:1fr}
+  .pane.hist{border-right:0;border-bottom:1px solid var(--line)}
+  .pane.face{border-left:0;border-top:1px solid var(--line)}
+}
+
+/* ── sidebar: chats, and the agent they belong to ───────────────────────── */
+.side-top{padding:12px 12px 8px;display:flex;flex-direction:column;gap:8px;flex:none}
+.newchat{display:flex;align-items:center;gap:8px;width:100%;padding:9px 11px;cursor:pointer;
+  background:transparent;border:1px solid var(--line2);border-radius:9px;color:var(--text);
+  font-family:var(--sans);font-size:13px;text-align:left}
+.newchat:hover{background:#141418;border-color:#333}
+.newchat .plus{color:var(--orange);font-size:15px;line-height:1}
+.side-search{width:100%;padding:7px 10px;background:#0e0e11;border:1px solid var(--line);
+  border-radius:8px;color:var(--text);font-family:var(--sans);font-size:12.5px;outline:none}
+.side-search:focus{border-color:#333}
+.side-search::placeholder{color:var(--faint)}
+
+.side-label{font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;color:var(--faint);
+  text-transform:uppercase;padding:10px 12px 4px;flex:none}
+.thr{display:flex;align-items:center;gap:6px;padding:9px 10px;border-radius:8px;cursor:pointer;
+  color:#cfcfcf;font-family:var(--sans);font-size:13px}
+.thr:hover{background:#141418}
+.thr.on{background:#1a1a1f;color:#fff}
+.thr .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.thr .dots{flex:none;opacity:0;border:0;background:transparent;color:var(--muted);cursor:pointer;
+  font-size:15px;line-height:1;padding:2px 4px;border-radius:5px}
+.thr:hover .dots,.thr.on .dots{opacity:1}
+.thr .dots:hover{background:#26262c;color:#fff}
+.thr-empty{color:var(--faint);font-family:var(--sans);font-size:12.5px;padding:10px 9px;line-height:1.6}
+
+.menu{position:fixed;z-index:60;min-width:150px;background:#141418;border:1px solid var(--line2);
+  border-radius:9px;padding:5px;box-shadow:0 14px 40px rgba(0,0,0,.6)}
+.menu button{display:block;width:100%;text-align:left;padding:7px 10px;border:0;border-radius:6px;
+  background:transparent;color:var(--text);font-family:var(--sans);font-size:13px;cursor:pointer}
+.menu button:hover{background:#22222a}
+.menu button.danger:hover{background:#3a1410;color:#ff9d86}
+
+/* ── the agent this chat belongs to, and the wallet it came from ────────── */
+.side-foot{flex:none;border-top:1px solid var(--line);padding:10px 10px 12px}
+.wbtn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:9px 11px;
+  cursor:pointer;background:transparent;border:1px solid var(--orange);border-radius:9px;
+  color:var(--orange);font-family:var(--mono);font-size:11px;letter-spacing:.12em;
+  text-transform:uppercase}
+.wbtn:hover{background:rgba(247,107,0,.10)}
+.agent-row{display:flex;align-items:center;gap:9px;width:100%;padding:7px 8px;border-radius:9px;
+  cursor:pointer;background:transparent;border:0;color:var(--text);text-align:left}
+.agent-row:hover{background:#141418}
+.agent-row img,.agent-row .ph{width:26px;height:26px;border-radius:50%;flex:none;object-fit:cover;
+  background:#1b1b20;border:1px solid var(--line2)}
+.agent-row .who{flex:1;min-width:0}
+.agent-row .nm{font-family:var(--sans);font-size:13px;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.agent-row .sub{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;color:var(--faint);
+  text-transform:uppercase}
+.agent-row .chev{color:var(--muted);font-size:11px;flex:none}
+.picker{position:fixed;z-index:60;max-height:320px;overflow-y:auto;min-width:250px;
+  background:#141418;border:1px solid var(--line2);border-radius:11px;padding:6px;
+  box-shadow:0 18px 50px rgba(0,0,0,.65)}
+.picker .hd{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;color:var(--faint);
+  text-transform:uppercase;padding:7px 9px 5px}
+.picker .none{color:var(--faint);font-family:var(--sans);font-size:12.5px;padding:8px 9px;
+  line-height:1.6}
+.nft{display:flex;align-items:center;gap:11px;margin:14px 0 10px}
+.nft-art{width:54px;height:54px;border-radius:11px;object-fit:cover;flex:none;
+  background:#141418;border:1px solid var(--line2)}
+.nft-id{min-width:0}
+.nft-name{font-family:var(--display);font-size:19px;font-weight:800;color:var(--text);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nft-sub{font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;color:var(--faint);
+  text-transform:uppercase;margin-top:2px}
+.nft-agent{font-family:var(--mono);font-size:12px;letter-spacing:.06em;color:var(--orange);
+  margin-bottom:2px}
+
+/* ── welcome: the empty state, in the dashboard's own language ──────────── */
+.welcome{padding:38px 30px 10px;max-width:760px}
+.w-h{font-family:'Bebas Neue',var(--display);font-size:64px;line-height:.92;letter-spacing:.5px;
+  color:var(--text);margin:0 0 10px}
+.w-dot{color:var(--orange)}
+.w-sub{font-family:var(--sans);font-size:14.5px;line-height:1.75;color:var(--muted);
+  margin:0 0 26px;max-width:56ch}
+.w-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.w-card{background:rgba(20,20,24,.55);border:1px solid var(--line);border-radius:14px;
+  padding:15px 16px;-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
+.w-card .w-k{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;
+  color:var(--orange);margin-bottom:8px}
+.w-card p{font-family:var(--sans);font-size:13px;line-height:1.65;color:var(--muted);margin:0}
+@media(max-width:900px){ .w-grid{grid-template-columns:1fr} .w-h{font-size:46px} }
+.pane.chat .welcome{flex:none;overflow-y:auto}
+
+/* nothing bound yet — a target, not an empty pane */
+.nft-add{display:flex;align-items:center;gap:12px;width:100%;margin:16px 0 12px;padding:12px;
+  background:transparent;border:1px dashed var(--line2);border-radius:14px;cursor:pointer;
+  text-align:left;color:var(--text)}
+.nft-add:hover{border-color:var(--orange);background:rgba(247,107,0,.05)}
+.nft-add .ring{flex:none;width:38px;height:38px;border-radius:50%;display:grid;place-items:center;
+  border:1px solid var(--orange);color:var(--orange);font-size:19px;line-height:1}
+.nft-add:hover .ring{background:var(--orange);color:#0a0a0a}
+.add-copy{min-width:0;display:block}
+.add-copy b{display:block;font-family:var(--sans);font-size:13.5px;font-weight:600}
+.add-copy i{display:block;font-style:normal;font-family:var(--sans);font-size:11.5px;
+  color:var(--faint);margin-top:2px;line-height:1.45}
+
+/* ── the menu bar ───────────────────────────────────────────────────────── */
+.topbar{flex:none;display:flex;align-items:center;gap:22px;height:52px;padding:0 18px;
+  border-bottom:1px solid var(--line);background:rgba(10,10,10,.86);
+  -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
+.tb-mark{font-family:'Bebas Neue',var(--display);font-size:21px;letter-spacing:.5px;
+  color:var(--text);text-decoration:none;line-height:1}
+.tb-mark i{font-style:normal;color:var(--orange)}
+.tb-nav{display:flex;align-items:center;gap:18px;flex:1}
+.tb-nav a{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--muted);text-decoration:none}
+.tb-nav a:hover{color:var(--text)}
+.tb-cta{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--orange);text-decoration:none;border:1px solid var(--orange);border-radius:999px;
+  padding:7px 15px}
+.tb-cta:hover{background:rgba(247,107,0,.12)}
+@media(max-width:900px){ .tb-nav a:nth-child(n+3){display:none} }
+.w-local{border-color:rgba(247,107,0,.35)}
+.w-dl{display:inline-block;margin-top:10px;font-family:var(--mono);font-size:10.5px;
+  letter-spacing:.12em;text-transform:uppercase;color:var(--orange);text-decoration:none;
+  border-bottom:1px solid rgba(247,107,0,.4);padding-bottom:2px}
+.w-dl:hover{color:var(--text);border-bottom-color:var(--text)}
+.tb-logo{display:flex;align-items:center;gap:7px;text-decoration:none;font-size:17px;
+  font-weight:800;line-height:1}
+.tb-logo .chev{display:block;flex:none;width:9px;height:15px}
+.tb-logo .mark{color:var(--green);font-family:Inter,ui-sans-serif,system-ui,sans-serif}
+.tb-logo .mark b{color:#fff;font-weight:inherit}
+/* green is a brand colour here too, not just the reply voice */
+.w-card .w-k{color:var(--orange)}
+.w-h .w-dot{color:var(--green)}
+/* [hidden] is a UA rule at the lowest specificity, so ANY class rule that sets display —
+   .nft{display:flex}, .spec{display:grid} — silently beats it and the element renders anyway.
+   That is why an empty NFT frame kept appearing with no agent bound. One rule, page-wide. */
+[hidden]{display:none !important}
+
+/* ── model picker in the composer ───────────────────────────────────────── */
+.model-btn{flex:none;display:flex;align-items:center;gap:6px;padding:0 12px;height:100%;
+  background:transparent;border:0;border-right:1px solid var(--line);cursor:pointer;
+  color:var(--muted);font-family:var(--mono);font-size:11px;letter-spacing:.08em;
+  white-space:nowrap}
+.model-btn:hover{color:var(--text)}
+.model-btn .cv{font-size:9px;opacity:.7}
+.mpop{position:fixed;z-index:70;width:290px;background:#141418;border:1px solid var(--line2);
+  border-radius:12px;padding:6px;box-shadow:0 18px 50px rgba(0,0,0,.65)}
+.mpop .hd{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;color:var(--faint);
+  text-transform:uppercase;padding:8px 9px 5px}
+.mrow{display:flex;align-items:center;gap:9px;width:100%;padding:8px 9px;border:0;border-radius:8px;
+  background:transparent;color:var(--text);font-family:var(--sans);font-size:13px;cursor:pointer;
+  text-align:left}
+.mrow:hover{background:#22222a}
+.mrow .tick{flex:none;width:14px;color:var(--green)}
+.mrow .mi{flex:1;min-width:0}
+.mrow .mi b{display:block;font-weight:600}
+.mrow .mi i{display:block;font-style:normal;font-size:11px;color:var(--faint);margin-top:1px}
+.mrow.need{color:var(--muted)}
+.keybox{border-top:1px solid var(--line);margin-top:6px;padding:10px 9px 6px}
+.keybox label{display:block;font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--faint);margin-bottom:6px}
+.keybox input{width:100%;padding:8px 10px;background:#0e0e11;border:1px solid var(--line);
+  border-radius:8px;color:var(--text);font-family:var(--mono);font-size:12px;outline:none}
+.keybox input:focus{border-color:var(--orange)}
+.keybox .save{margin-top:8px;width:100%;padding:8px;border:0;border-radius:8px;cursor:pointer;
+  background:var(--orange);color:#0a0a0a;font-family:var(--mono);font-size:10.5px;
+  letter-spacing:.12em;text-transform:uppercase}
+.keybox .note{margin:8px 0 0;font-family:var(--sans);font-size:11px;line-height:1.55;
+  color:var(--faint)}
+.keybox .note b{color:var(--muted)}
+</style>
+<style>
+/* ── THE DASHBOARD ────────────────────────────────────────────────────────────────────────
+   WHAT WAS WRONG WITH THE PAGE THIS REPLACES
+   It was four cards of read-only text: "Wallet — not connected", "Bound agent — none",
+   ".agent name — —". Every line named something you might want to change and gave you no way
+   to change it, so the page's whole function was to tell you what you already knew. A settings
+   page whose every row is a noun is a status report wearing a settings page's title.
+
+   Built instead the way the old ojmc.fun dashboard was: a LEFT RAIL of sections, one panel
+   live at a time, and every row that names a thing carries the control that changes it. The
+   rail is also what makes it survive growth — a new section is a rail entry, not another card
+   pushed further down a single scroll.
+
+   ONE VIEWPORT. The rail and the panel scroll independently; the page itself does not move.
+   ──────────────────────────────────────────────────────────────────────────────────────── */
+  html,body{height:100%}
+  body{display:flex;flex-direction:column;overflow:hidden}
+
+  .dash{flex:1;min-height:0;display:grid;grid-template-columns:236px minmax(0,1fr)}
+  @media(max-width:760px){ .dash{grid-template-columns:1fr} .drail{display:none} }
+
+  .drail{border-right:1px solid var(--line);padding:22px 12px;overflow-y:auto;
+         background:var(--ground)}
+  .dback{display:flex;align-items:center;gap:8px;margin:0 0 18px;padding:8px 10px;
+         border:1px solid var(--line2);border-radius:9px;text-decoration:none;color:var(--muted);
+         font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase}
+  .dback:hover{border-color:var(--orange);color:var(--orange)}
+  .dback .ar{font-size:13px;line-height:1}
+  .drail h1{font-family:'Bebas Neue',var(--display);font-size:30px;line-height:1;
+            margin:0 0 3px;padding:0 10px}
+  .drail h1 span{color:var(--orange)}
+  .drail .sub{font-size:11.5px;color:var(--faint);padding:0 10px;margin-bottom:18px;line-height:1.5}
+  .dgrp{font-family:var(--mono);font-size:9px;letter-spacing:.18em;text-transform:uppercase;
+        color:var(--faint);padding:16px 10px 7px}
+  .dlink{display:flex;align-items:center;gap:9px;width:100%;padding:8px 10px;border:0;
+         border-radius:9px;background:transparent;color:var(--muted);cursor:pointer;
+         font-family:var(--sans);font-size:13.5px;text-align:left;text-decoration:none}
+  .dlink:hover{background:#141418;color:var(--text)}
+  .dlink.on{background:#17171c;color:var(--text)}
+  .dlink.on .dot{background:var(--orange)}
+  .dlink .dot{flex:none;width:5px;height:5px;border-radius:50%;background:#2e2e34}
+  .dlink em{margin-left:auto;font-style:normal;font-family:var(--mono);font-size:10.5px;
+            color:var(--faint)}
+
+  .dbody{overflow-y:auto;padding:30px 30px 70px}
+  .dbody .inner{max-width:640px}
+  .panel[hidden]{display:none !important}
+  /* the page-wide h2 rule above paints headings --faint; a panel title is the loudest thing
+     in the panel, so it takes the colour back explicitly rather than inheriting a label's. */
+  .panel h2{font-family:'Bebas Neue',var(--display);font-size:34px;line-height:1;margin:0 0 5px;
+            color:var(--text);letter-spacing:0;text-transform:none}
+  .panel .lede{font-size:13px;color:var(--muted);margin:0 0 22px;line-height:1.6}
+
+  .sec{border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin-bottom:14px;
+       background:rgba(20,20,24,.5)}
+  .sec h3{font-family:var(--mono);font-size:9.5px;letter-spacing:.18em;text-transform:uppercase;
+          color:var(--orange);margin:0 0 12px}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:10px 0;
+       border-bottom:1px solid var(--line)}
+  .row:last-child{border-bottom:0}
+  .row .k{font-size:13.5px}
+  .row .k i{display:block;font-style:normal;font-size:11.5px;color:var(--faint);margin-top:2px}
+  .row .v{font-family:var(--mono);font-size:12.5px;text-align:right;white-space:nowrap;
+          display:flex;align-items:center;gap:10px;justify-content:flex-end}
+  .row .v .val{color:var(--text)}
+  .row .v .off{color:var(--faint)}
+
+  .bar{height:6px;border-radius:99px;background:#1c1c20;overflow:hidden;margin-top:10px}
+  .bar i{display:block;height:100%;background:var(--orange);border-radius:99px}
+
+  .btn{flex:none;padding:7px 13px;border:1px solid var(--line2);border-radius:9px;
+       background:transparent;color:var(--text);font-family:var(--mono);font-size:10px;
+       letter-spacing:.12em;text-transform:uppercase;cursor:pointer;white-space:nowrap}
+  .btn:hover{border-color:var(--orange);color:var(--orange)}
+  .btn.danger:hover{border-color:#ff8a5c;color:#ff8a5c}
+  /* The wallet door is the one filled control on this page — orange ground, white
+     letters, the same button as the one in the chat sidebar. */
+  .btn.wallet{background:var(--orange);border-color:var(--orange);color:#fff;
+              font-weight:700}
+  .btn.wallet:hover{background:var(--orangeHi);border-color:var(--orangeHi);color:#fff}
+
+  /* identity row: the avatar comes from the bound agent, because the agent IS the face here */
+  .idrow{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap}
+  .av{flex:none;width:52px;height:52px;border-radius:50%;overflow:hidden;background:#17171c;
+      border:1px solid var(--line2);display:flex;align-items:center;justify-content:center;
+      color:var(--faint);font-family:var(--mono);font-size:17px}
+  .av img{width:100%;height:100%;object-fit:cover}
+  .idf{flex:1;min-width:190px}
+  .idf label{display:block;font-family:var(--mono);font-size:9px;letter-spacing:.16em;
+             text-transform:uppercase;color:var(--faint);margin-bottom:6px}
+  .idf input{width:100%;padding:9px 11px;background:#0e0e11;border:1px solid var(--line);
+             border-radius:9px;color:var(--text);font-family:var(--sans);font-size:13px;outline:none}
+  .idf input:focus{border-color:var(--orange)}
+
+  /* reach: the count is the point of the whole section, so it is stated before the list */
+  .reach{margin-bottom:16px}
+  .reach-h{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+  .reach-h span{font-family:var(--mono);font-size:11.5px;color:var(--text)}
+  .reach-h em{font-style:normal;font-size:11.5px;color:var(--faint);text-align:right}
+
+  .conn{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--line)}
+  .conn:last-of-type{border-bottom:0}
+  .conn .cm{flex:none;width:26px;height:26px;border-radius:7px;background:#17171c;
+            border:1px solid var(--line2);display:flex;align-items:center;justify-content:center;
+            font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .conn.on .cm{border-color:var(--orange);color:var(--orange)}
+  .conn .ct{flex:1;min-width:0}
+  .conn .ct b{display:block;font-size:13.5px;font-weight:600}
+  .conn .ct i{display:block;font-style:normal;font-size:11.5px;color:var(--faint);margin-top:2px}
+  .conn .soon{flex:none;font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;
+              text-transform:uppercase;color:var(--faint)}
+
+  .note{font-size:11.5px;line-height:1.6;color:var(--faint);margin:12px 0 0}
+  .note a{color:var(--orange)}
+
+  /* the model list — a real choice, not a label saying which one is on */
+  .mopt{display:flex;align-items:center;gap:11px;width:100%;padding:11px 12px;border-radius:10px;
+        border:1px solid var(--line);background:transparent;color:var(--text);cursor:pointer;
+        text-align:left;margin-bottom:8px}
+  .mopt:last-child{margin-bottom:0}
+  .mopt:hover{border-color:var(--line2)}
+  .mopt.on{border-color:var(--orange);background:rgba(247,107,0,.06)}
+  .mopt .tick{flex:none;width:15px;color:var(--orange);font-family:var(--mono);font-size:13px}
+  .mopt b{display:block;font-size:13.5px;font-weight:600}
+  .mopt i{display:block;font-style:normal;font-size:11.5px;color:var(--faint);margin-top:2px}
+  .mopt .need{margin-left:auto;font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;
+              text-transform:uppercase;color:var(--faint)}
+
+  .keyed{display:flex;gap:8px;margin-top:10px}
+  .keyed input{flex:1;min-width:0;padding:9px 11px;background:#0e0e11;border:1px solid var(--line);
+               border-radius:9px;color:var(--text);font-family:var(--mono);font-size:12px;
+               outline:none}
+  .keyed input:focus{border-color:var(--orange)}
+
+  .chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:4px}
+  .chip{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;padding:5px 10px;
+        border:1px solid var(--line2);border-radius:999px;color:var(--muted)}
+  .chip.on{border-color:var(--orange);color:var(--orange)}
+
+  .hist{margin-top:4px}
+  .hrow{display:flex;gap:12px;align-items:baseline;padding:9px 0;border-bottom:1px solid var(--line)}
+  .hrow:last-child{border-bottom:0}
+  .hrow .q{flex:1;min-width:0;font-size:13px;overflow:hidden;text-overflow:ellipsis;
+           white-space:nowrap;color:var(--text)}
+  .hrow .s{flex:none;font-family:var(--mono);font-size:10px;letter-spacing:.1em;
+           text-transform:uppercase;color:var(--faint)}
+  .hrow .s.minted{color:var(--orange)}
+  .empty{font-size:12.5px;color:var(--faint);padding:6px 0}
+</style>
+
+<style id="in-app">
+  /* the window's own controls own the top-left corner; nothing else may sit there */
+  .tb-nav { display: none !important; }
+  .topbar { padding-left: 86px; }
+  .pane.hist .side-top { padding-top: 30px; }
+</style>
+</head>
+<body>
+<nav class="topbar">
+  <a class="tb-logo" href="https://xearn.com/" aria-label="xEarn">
+    <svg class="chev" viewBox="0 0 50 80" aria-hidden="true"><path d="M50,0 L27.9,0 L2.5,41.5 L27.9,80 L50,80 L24.8,41.5 Z" fill="#fd6e01"/></svg>
+    <span class="mark"><b>x</b>Earn</span>
+    <svg class="chev" viewBox="0 0 50 80" aria-hidden="true"><path d="M0,0 L22.1,0 L47.5,41.5 L22.1,80 L0,80 L25.2,41.5 Z" fill="#fff"/></svg>
+  </a>
+  <div class="tb-nav">
+    <a href="https://xearn.com/">Home</a>
+    <a href="index.html">Ask Genie</a>
+    <a href="https://xearn.com/agent">.agent names</a>
+    <a href="https://xearn.com/faq">FAQ</a>
+  </div>
+  <a class="tb-cta" href="https://xearn.com/agent">Claim your .agent</a>
+</nav>
+
+<div class="dash">
+  <nav class="drail" id="drail">
+    <!-- THE WAY BACK COMES FIRST. It was at the bottom of the rail under "Go", below seven
+         other entries — which is not where anyone looks for the exit, and in the app the site
+         nav is hidden so this is the ONLY way back to the chat. A back control belongs at the
+         top, before the thing it is backing out of. -->
+    <a class="dback" id="backChat" href="index.html">
+      <span class="ar">&larr;</span> Ask Genie
+    </a>
+    <h1>Settings <span>&amp;</span> usage</h1>
+    <p class="sub">Everything here lives on this machine. There is no account to sign into.</p>
+
+    <div class="dgrp">You</div>
+    <button class="dlink on" data-p="account" type="button"><span class="dot"></span>Profile<em id="rAcct"></em></button>
+    <button class="dlink" data-p="usage" type="button"><span class="dot"></span>Usage<em id="rUse"></em></button>
+    <button class="dlink" data-p="model" type="button"><span class="dot"></span>Model &amp; keys<em id="rModel"></em></button>
+
+    <div class="dgrp">Mesh</div>
+    <button class="dlink" data-p="mesh" type="button"><span class="dot"></span>Earnings<em id="rEarn"></em></button>
+    <button class="dlink" data-p="packs" type="button"><span class="dot"></span>Skill packs</button>
+
+    <div class="dgrp">This machine</div>
+    <button class="dlink" data-p="data" type="button"><span class="dot"></span>Your data<em id="rChats"></em></button>
+    <button class="dlink" data-p="about" type="button"><span class="dot"></span>About</button>
+
+  </nav>
+
+  <div class="dbody"><div class="inner">
+
+    <!-- ── PROFILE ────────────────────────────────────────────────────────
+         WHAT THIS PAGE IS FOR. An agent answers better the more of your world it can reach,
+         and every source is a CATEGORY the Mesh can pull from: what you post, what you hold,
+         what you watch, who you talk to. So the profile is not a form about you — it is the
+         set of doors you have opened, and it says what each one feeds.
+
+         HONESTY IS THE WHOLE DESIGN HERE. A row whose door is not built yet says so and
+         carries no button. A greyed-out "Connect" that does nothing teaches someone that our
+         controls are decoration, and that lesson costs more than the missing feature. -->
+    <section class="panel" id="p-account">
+      <h2>Profile</h2>
+      <p class="lede">Who your agent is, and what it is allowed to know. Every connection is a
+        category the Mesh can answer from &mdash; connect more, and it reaches further.</p>
+
+      <div class="sec">
+        <h3>You</h3>
+        <div class="idrow">
+          <div class="av" id="pAv"><span id="pAvI">?</span></div>
+          <div class="idf">
+            <label>Display name</label>
+            <input id="pName" type="text" autocomplete="off" spellcheck="false"
+                   placeholder="What your agent calls you">
+          </div>
+          <div class="idf">
+            <label>Email</label>
+            <input id="pMail" type="email" autocomplete="off" spellcheck="false"
+                   placeholder="Where reports go">
+          </div>
+        </div>
+        <p class="note">Kept on this machine. Nothing here is uploaded, and the Mesh never sees
+          it &mdash; it is how your agent addresses you and where it sends what you ask it to send.</p>
+      </div>
+
+      <div class="sec">
+        <h3>Wallet &amp; agents</h3>
+        <div class="row"><div class="k">Address<i>Held by your wallet, never by us</i></div>
+          <div class="v"><span class="off" id="sWallet">not connected</span>
+            <button class="btn wallet" id="wBtn" type="button">Connect a wallet</button></div></div>
+        <div class="row"><div class="k">Bound agent<i>Each NFT you hold is its own agent</i></div>
+          <div class="v"><span class="off" id="sAgent">none</span>
+            <a class="btn" id="pickAgent" href="index.html">Choose</a></div></div>
+        <div class="row"><div class="k">Agents in this wallet<i>Every one of them can answer
+          under its own name</i></div>
+          <div class="v"><span class="off" id="sNfts">&mdash;</span></div></div>
+        <div class="row"><div class="k">.agent names<i>A name and an agent are separate tokens
+          that share a holder</i></div>
+          <div class="v"><span class="off" id="sNames">&mdash;</span>
+            <a class="btn" href="https://xearn.com/agent">Claim</a></div></div>
+        <p class="note" id="wNote">Connecting asks your wallet for an address and nothing else.
+          It hands over no key and cannot move funds.</p>
+      </div>
+
+      <div class="sec">
+        <h3>Connected accounts</h3>
+        <div class="reach">
+          <div class="reach-h"><span id="cCount">0 of 7 connected</span>
+            <em>Each one adds a category the Mesh can answer from</em></div>
+          <div class="bar"><i id="cBar" style="width:0%"></i></div>
+        </div>
+        <div id="cList"></div>
+        <p class="note">A connection is read-only unless the door itself says otherwise, and you
+          can cut any of them here. What an agent learns from a source is inscribed under YOUR
+          name &mdash; which is how it earns when it answers someone else.</p>
+      </div>
+    </section>
+
+    <!-- ── USAGE ──────────────────────────────────────────────────────────── -->
+    <section class="panel" id="p-usage" hidden>
+      <h2>Usage</h2>
+      <p class="lede">Counted in this browser, and reset each day.</p>
+      <div class="sec">
+        <h3>Today</h3>
+        <div class="row"><div class="k">Messages on the web app<i>Free, with a daily limit</i></div>
+          <div class="v"><span class="val" id="uToday">0</span></div></div>
+        <div class="bar"><i id="uBar" style="width:0%"></i></div>
+        <p class="note" id="uNote"></p>
+      </div>
+      <div class="sec">
+        <h3>Lifting the cap</h3>
+        <div class="row"><div class="k">Local build<i>Runs on your machine &mdash; nothing leaves it,
+          and there is no cap at all</i></div>
+          <div class="v"><a class="btn" id="dlLocal" href="https://xearn.com/#download">Download</a></div></div>
+        <div class="row"><div class="k">Your own API key<i>Answers go through your key instead of
+          our free tier</i></div>
+          <div class="v"><button class="btn" data-goto="model" type="button">Add a key</button></div></div>
+      </div>
+    </section>
+
+    <!-- ── MODEL ──────────────────────────────────────────────────────────── -->
+    <section class="panel" id="p-model" hidden>
+      <h2>Model &amp; keys</h2>
+      <p class="lede">Which model answers you, and whose key it goes through.</p>
+      <div class="sec">
+        <h3>Answering with</h3>
+        <div id="mList"></div>
+      </div>
+      <div class="sec">
+        <h3>Your API keys</h3>
+        <div class="chips" id="kChips"></div>
+        <div class="keyed">
+          <input id="kVal" type="password" autocomplete="off" spellcheck="false"
+                 placeholder="Paste a key for the model selected above">
+          <button class="btn" id="kSave" type="button">Save</button>
+          <button class="btn danger" id="kClear" type="button">Forget all</button>
+        </div>
+        <p class="note">Saved in this browser only &mdash; never sent to us, never logged. The value
+          is never shown again, not even masked: a masked key still gives away its length and its
+          prefix.</p>
+      </div>
+    </section>
+
+    <!-- ── MESH ───────────────────────────────────────────────────────────── -->
+    <section class="panel" id="p-mesh" hidden>
+      <h2>Earnings</h2>
+      <p class="lede">What your agent has taught the Mesh, and what the Mesh made of it.</p>
+      <div class="sec">
+        <h3>This agent</h3>
+        <div class="row"><div class="k">Taught<i>Answers this agent contributed</i></div>
+          <div class="v"><span class="val" id="mCells">&mdash;</span></div></div>
+        <div class="row"><div class="k">Waiting to settle<i>Written, not yet on chain</i></div>
+          <div class="v"><span class="val" id="mPend">&mdash;</span></div></div>
+        <div class="row"><div class="k">Earned<i>$MESH credited to this agent</i></div>
+          <div class="v"><span class="val" id="mEarn">&mdash;</span></div></div>
+      </div>
+      <div class="sec">
+        <h3>Recent</h3>
+        <div class="hist" id="mHist"><p class="empty">Bind an agent to see its ledger.</p></div>
+      </div>
+    </section>
+
+    <!-- ── PACKS ──────────────────────────────────────────────────────────── -->
+    <section class="panel" id="p-packs" hidden>
+      <h2>Skill packs</h2>
+      <p class="lede">Buy the expertise instead of training it. Buying a pack inscribes its skills
+        to your agent, authored by your agent.</p>
+      <div class="sec"><h3>Available</h3><div id="pkList"></div></div>
+    </section>
+
+    <!-- ── DATA ───────────────────────────────────────────────────────────── -->
+    <section class="panel" id="p-data" hidden>
+      <h2>Your data</h2>
+      <p class="lede">None of this is uploaded. Clearing your browser data clears it too.</p>
+      <div class="sec">
+        <h3>Chats</h3>
+        <div class="row"><div class="k">Saved chats<i>Kept on this machine, per agent</i></div>
+          <div class="v"><span class="val" id="sChats">0</span>
+            <button class="btn" id="expChats" type="button">Export</button>
+            <button class="btn danger" id="clearChats" type="button">Delete all</button></div></div>
+        <p class="note">Export writes a single JSON file of every chat, so you can keep them
+          somewhere we cannot reach.</p>
+      </div>
+      <div class="sec">
+        <h3>Everything else</h3>
+        <div class="row"><div class="k">Local settings<i>Model choice, bound agent, name mapping</i></div>
+          <div class="v"><button class="btn danger" id="clearAll" type="button">Reset</button></div></div>
+      </div>
+    </section>
+
+    <!-- ── ABOUT ──────────────────────────────────────────────────────────── -->
+    <section class="panel" id="p-about" hidden>
+      <h2>About</h2>
+      <p class="lede">Genie 1, grounded in the Mesh.</p>
+      <div class="sec">
+        <h3>Build</h3>
+        <div class="row"><div class="k">Running<i id="aWhere">In a browser tab</i></div>
+          <div class="v"><span class="val" id="aBuild">Genie 1</span></div></div>
+        <div class="row" id="aGetRow"><div class="k">Desktop app<i>macOS, Windows and Linux</i></div>
+          <div class="v"><a class="btn" href="https://xearn.com/#download">Get the app</a></div></div>
+        <div class="row"><div class="k">Open source<i>The plugin and its tools</i></div>
+          <div class="v"><a class="btn" href="https://github.com/orangegenie/genie-plugin"
+             target="_blank" rel="noopener">GitHub</a></div></div>
+      </div>
+    </section>
+
+  </div></div>
+</div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var IN_APP = document.documentElement.hasAttribute("data-app");
+
+  function get(k, d) { try { var v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); }
+                       catch (e) { return d; } }
+  function set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+
+  /* ── the rail ──────────────────────────────────────────────────────────────────────
+     One panel live at a time, and the choice is remembered — coming back to settings to
+     finish what you were doing should not start you at the top again. */
+  var LAST = "og.ask.settingsPanel";
+  function show(name) {
+    document.querySelectorAll(".panel").forEach(function (p) {
+      p.hidden = (p.id !== "p-" + name);
+    });
+    document.querySelectorAll(".dlink[data-p]").forEach(function (b) {
+      b.classList.toggle("on", b.getAttribute("data-p") === name);
+    });
+    set(LAST, name);
+    var db = document.querySelector(".dbody"); if (db) db.scrollTop = 0;
+  }
+  document.querySelectorAll(".dlink[data-p]").forEach(function (b) {
+    b.addEventListener("click", function () { show(b.getAttribute("data-p")); });
+  });
+  document.querySelectorAll("[data-goto]").forEach(function (b) {
+    b.addEventListener("click", function () { show(b.getAttribute("data-goto")); });
+  });
+
+  /* ── inside the app, the app's own pages stay inside the app ───────────────────────
+     The desktop build stamps data-app on <html>; every link that would send someone out to
+     the website is retargeted here rather than patched at build time, because a build-time
+     find-and-replace goes silently stale the moment the markup it matched is edited. */
+  if (IN_APP) {
+    $("backChat").href = "index.html";
+    $("pickAgent").href = "index.html";
+    $("aGetRow").hidden = true;
+    $("aWhere").textContent = "In the desktop app";
+    var dl = $("dlLocal"); if (dl) { dl.textContent = "Installed"; dl.removeAttribute("href"); }
+  }
+
+  /* ── PROFILE ───────────────────────────────────────────────────────────────────── */
+  var wallet = get("og.ask.wallet", null);
+  var agent  = get("og.ask.agent", null);
+
+  function shortAddr(a) { return a.slice(0, 6) + "…" + a.slice(-4); }
+
+  // identity — typed here, kept here. Written on every keystroke rather than behind a Save
+  // button: there is nothing to submit, so a Save button would only be a thing to forget.
+  var prof = get("og.ask.profile", {}) || {};
+  $("pName").value = prof.name || "";
+  $("pMail").value = prof.email || "";
+  function saveProf() {
+    prof.name = $("pName").value.trim();
+    prof.email = $("pMail").value.trim();
+    set("og.ask.profile", prof);
+    paintAccount();
+  }
+  $("pName").addEventListener("input", saveProf);
+  $("pMail").addEventListener("input", saveProf);
+
+  // The signed-in email is the truth when there is one, and it is not editable by typing over
+  // it — it came from a door that verified it.
+  var signedIn = get("og.ask.signedin", null);
+  if (signedIn && signedIn.email) {
+    $("pMail").value = signedIn.email;
+    $("pMail").readOnly = true;
+    $("pMail").title = "From the email you signed in with";
+  }
+
+  function paintAccount() {
+    var w = $("sWallet"), b = $("wBtn");
+    w.textContent = wallet ? shortAddr(wallet) : "not connected";
+    w.className = wallet ? "val" : "off";
+    b.textContent = wallet ? "Disconnect" : (window.ethereum ? "Connect a wallet" : "How to connect");
+    b.className = wallet ? "btn danger" : (window.ethereum ? "btn wallet" : "btn");
+
+    var a = $("sAgent");
+    a.textContent = agent ? (agent.name || "agent") : "none";
+    a.className = agent ? "val" : "off";
+
+    var nfts = get("og.ask.nfts", []) || [];
+    var nf = $("sNfts");
+    nf.textContent = nfts.length ? (nfts.length + (nfts.length === 1 ? " agent" : " agents")) : "—";
+    nf.className = nfts.length ? "val" : "off";
+
+    var names = get("og.ask.names", []) || [];
+    var n = $("sNames");
+    n.textContent = names.length ? names.join(", ") : "—";
+    n.className = names.length ? "val" : "off";
+
+    // The avatar is the bound agent's art. Falling back to an initial rather than a silhouette:
+    // a generic person icon is a stranger, and this is meant to be YOUR agent looking back.
+    var av = $("pAv");
+    if (agent && agent.image) {
+      av.innerHTML = '<img alt="" src="' + agent.image + '">';
+    } else {
+      var who = (prof.name || (names[0] || "") || "").trim();
+      av.innerHTML = '<span>' + (who ? who[0].toUpperCase() : "?") + '</span>';
+    }
+
+    $("rAcct").textContent = (prof.name || (wallet ? shortAddr(wallet) : "")) || "";
+  }
+
+  $("wBtn").addEventListener("click", async function () {
+    if (wallet) {
+      wallet = null;
+      ["og.ask.wallet", "og.ask.names", "og.ask.nfts"].forEach(function (k) {
+        localStorage.removeItem(k);
+      });
+      paintAccount(); return;
+    }
+    // The extension is asked for an address and nothing else. eth_requestAccounts hands over no
+    // key and cannot move funds — a transfer needs a separate call this page never makes.
+    // A wallet extension injects window.ethereum into a browser TAB. The app's webview is not
+    // a tab and never receives it, so in the app this button can never connect — it has to say
+    // so rather than do nothing.
+    if (!window.ethereum) {
+      $("wNote").textContent = IN_APP
+        ? "Browser wallets live in a browser. Sign in with email on the chat page and the app " +
+          "makes you an address of your own — or open xearn.com in your browser to use an extension."
+        : "No wallet extension found in this browser. Sign in with email on the chat page and " +
+          "you get an address of your own, with no extension to install.";
+      return;
+    }
+    try {
+      var acc = await window.ethereum.request({ method: "eth_requestAccounts" });
+      wallet = (acc && acc[0]) || null;
+      if (wallet) {
+        set("og.ask.wallet", wallet);
+        try {
+          var nr = await fetch("/api/nfts?owner=" + wallet);
+          var nd = await nr.json();
+          set("og.ask.nfts", nd.nfts || []);
+        } catch (e) {}
+        try {
+          var r = await fetch("/api/agent-names?owner=" + wallet);
+          var d = await r.json();
+          set("og.ask.names", (d.names || []).map(function (x) { return x.name + ".agent"; }));
+        } catch (e) {}
+      }
+      paintAccount(); paintConns();
+    } catch (e) {
+      $("wNote").textContent = "The wallet closed without connecting. Nothing was sent.";
+    }
+  });
+
+  /* ── CONNECTED ACCOUNTS ────────────────────────────────────────────────────────────
+     One array is the whole section. A source has a `door` (a URL that actually opens it) or
+     it does not, and the row is drawn from that fact — so opening a new door later is one
+     field, and a door that is not built cannot accidentally render as a button.
+
+     `feeds` is not decoration either. It is the promise being made in exchange for the
+     connection, stated on the row where the decision is taken rather than in a policy page. */
+  var SOURCES = [
+    // The wallet's door is the button in the card above, not a URL — `act` covers a source whose
+    // door is somewhere on this page. Without it this row rendered "not open yet" directly under
+    // a working Connect button, which is the page calling itself a liar.
+    { k: "wallet",  m: "W",  t: "Wallet",     feeds: "What you hold and what you have traded",
+      act: function () { $("wBtn").click(); }, on: function () { return !!wallet; } },
+    { k: "email",   m: "@",  t: "Email",      feeds: "Where reports and meeting notes are sent",
+      door: "/ask", doorLabel: "Sign in",
+      on: function () { return !!(signedIn && signedIn.email) || !!prof.email; } },
+    { k: "x",       m: "X",  t: "X",          feeds: "Your posts and replies, and real leads in your DMs",
+      door: "https://orangegenie.bot/xbot", doorLabel: "Connect" },
+    { k: "opensea", m: "OS", t: "OpenSea",    feeds: "The collections you hold, list and watch",
+      door: null },
+    { k: "discord", m: "D",  t: "Discord",    feeds: "The servers you run and the roles you hold",
+      door: null },
+    { k: "github",  m: "GH", t: "GitHub",     feeds: "The code you write and the issues you close",
+      door: null },
+    { k: "youtube", m: "YT", t: "YouTube",    feeds: "What you publish, and what you watch",
+      door: null },
+  ];
+
+  function connState() { return get("og.ask.connections", {}) || {}; }
+
+  function paintConns() {
+    var st = connState(), wrap = $("cList"), n = 0;
+    wrap.innerHTML = "";
+    SOURCES.forEach(function (src) {
+      var on = src.on ? src.on() : !!st[src.k];
+      if (on) n++;
+      var row = document.createElement("div");
+      row.className = "conn" + (on ? " on" : "");
+      row.innerHTML = '<span class="cm">' + src.m + '</span>' +
+                      '<span class="ct"><b>' + src.t + '</b><i>' + src.feeds + '</i></span>';
+
+      if (on) {
+        var off = document.createElement("button");
+        off.className = "btn danger"; off.type = "button"; off.textContent = "Connected";
+        off.title = "Disconnect";
+        off.onclick = function () {
+          if (src.k === "wallet") { $("wBtn").click(); return; }
+          var c = connState(); delete c[src.k]; set("og.ask.connections", c); paintConns();
+        };
+        row.appendChild(off);
+      } else if (src.act) {
+        var ab = document.createElement("button");
+        ab.className = "btn"; ab.type = "button";
+        ab.textContent = src.doorLabel || "Connect";
+        ab.onclick = src.act;
+        row.appendChild(ab);
+      } else if (src.door) {
+        var a = document.createElement("a");
+        a.className = "btn"; a.href = src.door;
+        a.textContent = src.doorLabel || "Connect";
+        if (/^https?:/.test(src.door)) { a.target = "_blank"; a.rel = "noopener"; }
+        row.appendChild(a);
+      } else {
+        // No door yet, and no button pretending there is one.
+        var soon = document.createElement("span");
+        soon.className = "soon"; soon.textContent = "not open yet";
+        row.appendChild(soon);
+      }
+      wrap.appendChild(row);
+    });
+    $("cCount").textContent = n + " of " + SOURCES.length + " connected";
+    $("cBar").style.width = Math.round((n / SOURCES.length) * 100) + "%";
+  }
+
+  /* ── USAGE ─────────────────────────────────────────────────────────────────────── */
+  var CAP = 25, today = new Date().toISOString().slice(0, 10);
+  var u = get("og.ask.usage", {});
+  var used = (u && u.d === today) ? (u.n || 0) : 0;
+  $("uToday").textContent = used + " / " + CAP;
+  $("uBar").style.width = Math.min(100, (used / CAP) * 100) + "%";
+  $("rUse").textContent = used + "/" + CAP;
+  $("uNote").textContent = used >= CAP
+    ? "Today's free messages are used up. The local build has no limit at all."
+    : (CAP - used) + " left today. The count is kept in this browser, not on a server.";
+
+  /* ── MODEL ─────────────────────────────────────────────────────────────────────── */
+  // The list is a CHOICE, not a caption. The old page printed which model was answering and
+  // then made you go back to the chat page to change it.
+  var MODELS = [
+    ["genie-1",   "Genie 1",       "Grounded in the Mesh. Free, with a daily cap.", null],
+    ["local",     "Genie 1 local", "Runs on your machine. Nothing leaves it, no cap.", null],
+    ["anthropic", "Claude",        "Answers through your own Anthropic key.", "anthropic"],
+    ["openai",    "GPT",           "Answers through your own OpenAI key.", "openai"],
+    ["groq",      "Llama on Groq", "Answers through your own Groq key.", "groq"],
+  ];
+  var chosen = localStorage.getItem("og.ask.model") || "genie-1";
+  var keys = get("og.ask.keys", {}) || {};
+
+  function paintModels() {
+    var wrap = $("mList"); wrap.innerHTML = "";
+    MODELS.forEach(function (m) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "mopt" + (m[0] === chosen ? " on" : "");
+      b.innerHTML = '<span class="tick">' + (m[0] === chosen ? "●" : "○") + '</span>' +
+                    '<span><b>' + m[1] + '</b><i>' + m[2] + '</i></span>' +
+                    (m[3] && !keys[m[3]] ? '<span class="need">key needed</span>' : "");
+      b.onclick = function () {
+        chosen = m[0];
+        try { localStorage.setItem("og.ask.model", chosen); } catch (e) {}
+        paintModels(); paintKeys();
+      };
+      wrap.appendChild(b);
+    });
+    var lbl = MODELS.filter(function (m) { return m[0] === chosen; })[0];
+    $("rModel").textContent = lbl ? lbl[1] : "";
+  }
+
+  function paintKeys() {
+    var c = $("kChips"); c.innerHTML = "";
+    ["anthropic", "openai", "groq"].forEach(function (k) {
+      var el = document.createElement("span");
+      el.className = "chip" + (keys[k] ? " on" : "");
+      el.textContent = k + (keys[k] ? " · saved" : " · none");
+      c.appendChild(el);
+    });
+    var m = MODELS.filter(function (x) { return x[0] === chosen; })[0];
+    $("kVal").placeholder = (m && m[3]) ? ("Paste your " + m[3] + " key")
+                                        : "Genie 1 needs no key of yours";
+    $("kVal").disabled = !(m && m[3]);
+    $("kSave").disabled = !(m && m[3]);
+  }
+
+  $("kSave").addEventListener("click", function () {
+    var m = MODELS.filter(function (x) { return x[0] === chosen; })[0];
+    if (!m || !m[3]) return;
+    var v = $("kVal").value.trim();
+    if (!v) return;
+    keys[m[3]] = v; set("og.ask.keys", keys);
+    $("kVal").value = "";
+    paintKeys(); paintModels();
+  });
+  $("kClear").addEventListener("click", function () {
+    keys = {}; localStorage.removeItem("og.ask.keys"); paintKeys(); paintModels();
+  });
+
+  /* ── MESH ──────────────────────────────────────────────────────────────────────── */
+  // Real ledger or nothing. An invented pending figure is an invented debt.
+  (function () {
+    if (!agent) return;
+    fetch("/api/face?id=" + encodeURIComponent(agent.tokenId || 0))
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        $("mCells").textContent = (d.cells || []).length + " answers";
+        $("mPend").textContent  = d.pending;
+        $("mEarn").textContent  = d.earned + " $MESH";
+        $("rEarn").textContent  = d.earned;
+        var h = (d.history || []).slice().reverse();
+        var el = $("mHist");
+        if (!h.length) { el.innerHTML = '<p class="empty">Nothing yet. Whatever you teach it ' +
+                                        'lands here, with what the Mesh made of it.</p>'; return; }
+        el.innerHTML = "";
+        h.slice(0, 12).forEach(function (x) {
+          var r = document.createElement("div"); r.className = "hrow";
+          var q = document.createElement("div"); q.className = "q"; q.textContent = x.q;
+          var s = document.createElement("div");
+          s.className = "s" + (x.status === "minted" ? " minted" : "");
+          s.textContent = x.status === "minted" ? "+1 $MESH" : "waiting";
+          r.appendChild(q); r.appendChild(s); el.appendChild(r);
+        });
+      })
+      .catch(function () {});
+  })();
+
+  /* ── PACKS ─────────────────────────────────────────────────────────────────────── */
+  // The SAME eight ids the payment tiers key on (server.js pack_*). A list here that disagreed
+  // with that table would offer a pack that cannot be granted.
+  var BAZAAR = "https://scan.orangegenie.bot/orangescan";
+  var PACKS = [
+    ["pack_pm", "Certified Project Manager",
+     "Google PM certs, Anthropic training and Lean Six Sigma in one PM agent."],
+    ["pack_pm_marketing", "PM + Marketing Manager",
+     "The PM pack plus marketing and sales craft harvested from real campaigns."],
+    ["pack_videogenie", "VideoGenie",
+     "Watches YouTube, pulls the signal, pushes it where you read it."],
+    ["pack_concierge", "Meeting Concierge",
+     "Records and transcribes on-device, then emails a branded report with action items."],
+    ["pack_pip", "Trademark Your Style",
+     "Turns your prompts and art style into an owned PIP that earns when others use it."],
+    ["pack_derivative", "Derivative Generator",
+     "Your community makes new work in your style, and you are paid on every generation."],
+    ["pack_safu", "Crypto Safu Scout",
+     "Contract mechanics plus the funder-graph trace. Reads the ledger, not the candle."],
+    ["pack_xgrowth", "X Growth Agent",
+     "Runs your X through the official API only, and mines your DMs for real leads."],
+  ];
+  (function () {
+    var wrap = $("pkList");
+    PACKS.forEach(function (p) {
+      var a = document.createElement("a");
+      a.className = "mopt"; a.href = BAZAAR + "#" + p[0];
+      a.target = "_blank"; a.rel = "noopener";
+      a.innerHTML = '<span class="tick">›</span><span><b>' + p[1] + '</b><i>' + p[2] + '</i></span>';
+      wrap.appendChild(a);
+    });
+  })();
+
+  /* ── DATA ──────────────────────────────────────────────────────────────────────── */
+  function threadKeys() {
+    var out = [];
+    for (var i = 0; i < localStorage.length; i++) {
+      var k = localStorage.key(i);
+      if (k && k.indexOf("og.ask.threads.") === 0) out.push(k);
+    }
+    return out;
+  }
+  function countChats() {
+    var n = 0;
+    threadKeys().forEach(function (k) {
+      try { n += (JSON.parse(localStorage.getItem(k)) || []).length; } catch (e) {}
+    });
+    return n;
+  }
+  function paintData() {
+    var n = countChats();
+    $("sChats").textContent = n;
+    $("rChats").textContent = n || "";
+  }
+
+  $("expChats").addEventListener("click", function () {
+    var out = {};
+    threadKeys().forEach(function (k) {
+      try { out[k.replace("og.ask.threads.", "")] = JSON.parse(localStorage.getItem(k)); } catch (e) {}
+    });
+    var blob = new Blob([JSON.stringify(out, null, 2)], { type: "application/json" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "genie-chats-" + today + ".json";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+  });
+
+  $("clearChats").addEventListener("click", function () {
+    threadKeys().forEach(function (k) { localStorage.removeItem(k); });
+    paintData();
+  });
+
+  $("clearAll").addEventListener("click", function () {
+    ["og.ask.model", "og.ask.keys", "og.ask.agent", "og.ask.wallet", "og.ask.names",
+     "og.ask.agentnames", "og.ask.agentName"].forEach(function (k) { localStorage.removeItem(k); });
+    location.reload();
+  });
+
+  /* ── boot ──────────────────────────────────────────────────────────────────────── */
+  paintAccount(); paintConns(); paintModels(); paintKeys(); paintData();
+  var last = get(LAST, "account");
+  show(document.getElementById("p-" + last) ? last : "account");
+})();
+</script>
+</body>
+</html>
