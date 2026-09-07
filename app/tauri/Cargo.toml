@@ -36,6 +36,16 @@ tauri-plugin-deep-link = "2"
 # Linux the deep-link plugin cannot work at all without it.
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
+# OPENING A URL WITHOUT SPAWNING A PROCESS.
+# open_external used to run /usr/bin/open. App Sandbox forbids a sandboxed app from spawning
+# executables, so that one line is the difference between this app being submittable to the Mac
+# App Store and not. NSWorkspace openURL is the sandbox-legal way to hand a URL to the user's
+# default browser, and it is what Apple documents for exactly this.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSWorkspace"] }
+objc2-foundation = { version = "0.3", features = ["NSURL", "NSString"] }
+
 [profile.release]
 opt-level = "z"      # a chat window does not need speed, it needs to be small
 lto = true

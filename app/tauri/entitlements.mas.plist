@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MAC APP STORE ENTITLEMENTS — the smallest set that lets this app do its job.
+
+  Every entitlement is a permission Apple's reviewer will ask you to justify, so this asks for
+  two and no more:
+
+    app-sandbox     Mandatory for the store. Nothing ships without it.
+    network.client  The app talks to xearn.com/api for chat, sign-in and chain reads. Outbound
+                    only — it never listens, so network.server is deliberately absent.
+
+  DELIBERATELY NOT REQUESTED, and worth knowing why:
+    files.user-selected  — the app reads and writes nothing on disk but its own container.
+    network.server       — it accepts no connections.
+    print, camera, mic, location, address-book, calendars — untouched by this app.
+
+  A sandboxed app cannot spawn executables, which is why open_external calls NSWorkspace
+  instead of running /usr/bin/open. That one line was the whole barrier.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.app-sandbox</key>
+  <true/>
+  <key>com.apple.security.network.client</key>
+  <true/>
+</dict>
+</plist>

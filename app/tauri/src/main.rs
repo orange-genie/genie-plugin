@@ -101,13 +101,33 @@ fn open_external(url: String) -> Result<(), String> {
     if !url.starts_with("https://xearn.com/") {
         return Err(format!("refused: {url} is not ours"));
     }
+    // macOS: ask the window server to open it. NOT a subprocess — App Sandbox forbids a
+    // sandboxed app from spawning executables, and running /usr/bin/open is precisely that.
+    // This is the one change between an app that can be submitted to the Mac App Store and one
+    // that is rejected before a human sees it.
     #[cfg(target_os = "macos")]
-    let r = std::process::Command::new("open").arg(&url).spawn();
+    {
+        use objc2_app_kit::NSWorkspace;
+        use objc2_foundation::{NSString, NSURL};
+        let ns = NSString::from_str(&url);
+        // objc2 0.6 marks both of these safe — no unsafe block is needed or accepted.
+        let nsurl = NSURL::URLWithString(&ns)
+            .ok_or_else(|| "not a URL macOS will accept".to_string())?;
+        let ok = NSWorkspace::sharedWorkspace().openURL(&nsurl);
+        return if ok { Ok(()) } else { Err("macOS declined to open it".into()) };
+    }
+
     #[cfg(target_os = "windows")]
-    let r = std::process::Command::new("cmd").args(["/C", "start", "", &url]).spawn();
+    {
+        let r = std::process::Command::new("cmd").args(["/C", "start", "", &url]).spawn();
+        return r.map(|_| ()).map_err(|e| e.to_string());
+    }
+
     #[cfg(all(unix, not(target_os = "macos")))]
-    let r = std::process::Command::new("xdg-open").arg(&url).spawn();
-    r.map(|_| ()).map_err(|e| e.to_string())
+    {
+        let r = std::process::Command::new("xdg-open").arg(&url).spawn();
+        return r.map(|_| ()).map_err(|e| e.to_string());
+    }
 }
 
 fn main() {

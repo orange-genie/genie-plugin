@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  DIRECT-DOWNLOAD ENTITLEMENTS — for the notarized build people get from xearn.com.
+
+  Not the same file as the store build, on purpose. Notarization requires the HARDENED RUNTIME
+  but not the sandbox, and the two have different consequences: hardened runtime is about what
+  can be injected INTO the app, sandbox is about what the app can reach OUT to. Shipping the
+  store's sandbox on a direct download would restrict it for no benefit; shipping the direct
+  build's looser set to the store is an automatic rejection.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.network.client</key>
+  <true/>
+</dict>
+</plist>
