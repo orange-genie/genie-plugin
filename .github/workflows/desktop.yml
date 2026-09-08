@@ -20,6 +20,19 @@ on:
 permissions:
   contents: write
 
+# ONE RUN PER TAG. Without this, re-dispatching while a run is in flight leaves two runs racing
+# to attach assets to the same release — and the loser reports a failure for work that actually
+# succeeded, which is how a "all jobs have failed" email arrives for a build that shipped.
+concurrency:
+  group: desktop-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  # PINNED, NOT A RANGE. This was `--version "^2"`, which resolves to whatever the newest 2.x
+  # is on the morning of the run — so a CLI release nobody here chose could break a build that
+  # passed yesterday, with nothing in this repo having changed. A pin fails only when we move it.
+  TAURI_CLI_VERSION: "2.11.4"
+
 jobs:
   build:
     strategy:
@@ -34,10 +47,21 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             args: ""
-          - os: ubuntu-22.04
+          # UBUNTU 24.04, NOT 22.04. GitHub's runner-images announcement: "The Ubuntu 22 based
+          # runner images will begin deprecation on September 17th and will be fully unsupported
+          # by April 17th." Pinning to a retiring image is a build that is going to fail on a
+          # date nobody is watching for.
+          #
+          # The cost is glibc: 24.04 links against 2.39, so the AppImage this produces needs a
+          # distro at least that new. That is the trade the retirement forces, and it is better
+          # to make it deliberately now than to discover it when the image disappears.
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             args: ""
     runs-on: ${{ matrix.os }}
+    # A hung compile otherwise sits on a runner until GitHub's 6-hour ceiling. These builds take
+    # about 13 minutes; 45 is generous and still ends a stuck job the same day.
+    timeout-minutes: 45
     steps:
       # BUILD FROM THE BRANCH, UPLOAD TO THE TAG. The first run checked out the tag it was
       # asked to attach to — and that tag was cut BEFORE the app source existed, so every job
@@ -46,8 +70,25 @@ jobs:
       # where the code to build them lives. On a tag push these are the same commit anyway.
       - uses: actions/checkout@v4
 
+      # FAIL ON A TYPO'D TAG HERE, WITH A SENTENCE THAT SAYS SO. Left to the upload step, a tag
+      # that does not exist is CREATED — so a mistyped dispatch quietly publishes a new empty
+      # release instead of attaching to the intended one, and nothing looks wrong until someone
+      # goes looking for the download.
+      - name: Check the target tag exists
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WANT: ${{ github.event.inputs.tag }}
+        run: |
+          if ! gh release view "$WANT" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::No release tagged '$WANT'. Create it first, or dispatch against an existing tag."
+            exit 1
+          fi
+          echo "attaching to $WANT"
+
       - name: Linux build dependencies
-        if: matrix.os == 'ubuntu-22.04'
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
@@ -63,11 +104,27 @@ jobs:
         with:
           workspaces: app/tauri
 
+      # CACHE THE CLI BINARY, NOT JUST THE PROJECT. rust-cache covers app/tauri's dependencies
+      # and not ~/.cargo/bin, so `cargo install tauri-cli` recompiled the whole CLI from source
+      # on every job of every run — two to four minutes each, three times over, and a network
+      # round trip to crates.io that only has to be unreachable once to fail a build for reasons
+      # that have nothing to do with the code.
+      - name: Cache tauri-cli
+        id: cli-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-tauri
+            ~/.cargo/bin/cargo-tauri.exe
+          key: tauri-cli-${{ env.TAURI_CLI_VERSION }}-${{ runner.os }}
+
+      - name: Install tauri-cli
+        if: steps.cli-cache.outputs.cache-hit != 'true'
+        run: cargo install tauri-cli --version "${{ env.TAURI_CLI_VERSION }}" --locked
+
       - name: Build
         working-directory: app/tauri
-        run: |
-          cargo install tauri-cli --version "^2" --locked
-          cargo tauri build ${{ matrix.args }}
+        run: cargo tauri build ${{ matrix.args }}
 
       # Collected by extension rather than by exact filename: Tauri's bundle names carry the
       # version and the arch, so a hardcoded path silently stops matching on the next bump and
