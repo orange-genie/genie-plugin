@@ -58,6 +58,22 @@ jobs:
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             args: ""
+
+          # ── arm64, ON NATIVE RUNNERS ────────────────────────────────────────────────────
+          # Until these existed the release carried x86_64 only, so an ARM Linux box or an ARM
+          # Windows laptop had nothing to download that matched it. These are GitHub-hosted ARM
+          # runners and this repository is public, which is the only reason they cost nothing —
+          # if it ever goes private, price these before assuming the matrix still holds.
+          #
+          # BUILT NATIVELY, NOT CROSS-COMPILED, hence args stays empty: the runner's own host
+          # target IS aarch64, so the toolchain needs no extra target and there is no sysroot to
+          # assemble. Cross-compiling an AppImage is the version of this that eats a day.
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            args: ""
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            args: ""
     runs-on: ${{ matrix.os }}
     # A hung compile otherwise sits on a runner until GitHub's 6-hour ceiling. These builds take
     # about 13 minutes; 45 is generous and still ends a stuck job the same day.
@@ -124,7 +140,50 @@ jobs:
 
       - name: Build
         working-directory: app/tauri
+        # SIGNING HAPPENS HERE OR IT DOES NOT HAPPEN.
+        # Tauri reads these itself and will import the certificate, sign with the hardened
+        # runtime, submit to Apple and staple the ticket as part of the bundle step. That is
+        # why there is no hand-rolled keychain scripting below: the less of this we write, the
+        # less of it can be subtly wrong.
+        #
+        # Every one of these is empty when the secret is unset, and an empty value makes Tauri
+        # fall back to an AD-HOC signature. That fallback is exactly how v0.2.0 shipped a macOS
+        # build that every user's Gatekeeper answered with "Genie 1 is damaged and can't be
+        # opened" — the build succeeded, the upload succeeded, and nothing anywhere failed.
+        # The verification step below is what turns that silence into a red job.
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: cargo tauri build ${{ matrix.args }}
+
+      # ── THE GATE ───────────────────────────────────────────────────────────────────────────
+      # A build that cannot be opened is not a build, and the only way to know is to ask the
+      # same component the user's Mac will ask. spctl is that component.
+      #
+      # This FAILS THE JOB rather than warning. A warning in a log is what we already had:
+      # v0.2.0 shipped unsigned and sat on the download page for weeks, because nothing that
+      # could stop a release was ever unhappy about it. Better to publish a release with no
+      # macOS asset than one whose asset tells people it is damaged.
+      - name: Verify the macOS build is actually openable
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          APP=$(find app/tauri/target -type d -name "*.app" -path "*/release/bundle/macos/*" | head -1)
+          [ -n "$APP" ] || { echo "::error::no .app was produced"; exit 1; }
+          echo "checking: $APP"
+          codesign -dv --verbose=2 "$APP" 2>&1 | grep -E "Signature|flags" || true
+
+          if ! spctl -a -vvv -t exec "$APP" 2>&1 | tee /tmp/verdict | grep -q accepted; then
+            cat /tmp/verdict
+            echo "::error::Gatekeeper rejected this build — users would see \"Genie 1 is damaged and can't be opened\"."
+            echo "::error::Set APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_APP_PASSWORD and APPLE_TEAM_ID in the repository secrets."
+            exit 1
+          fi
+          echo "Gatekeeper: $(grep source= /tmp/verdict)"
 
       # Collected by extension rather than by exact filename: Tauri's bundle names carry the
       # version and the arch, so a hardcoded path silently stops matching on the next bump and
