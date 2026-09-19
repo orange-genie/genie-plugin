@@ -141,7 +141,15 @@ jobs:
           path: |
             ~/.cargo/bin/cargo-tauri
             ~/.cargo/bin/cargo-tauri.exe
-          key: tauri-cli-${{ env.TAURI_CLI_VERSION }}-${{ runner.os }}
+          # runner.arch IS LOAD-BEARING, and its absence is not a cache miss — it is a wrong hit.
+          # runner.os reports "Linux" for both ubuntu-24.04 and ubuntu-24.04-arm, and "Windows"
+          # for both windows-latest and windows-11-arm. With only the OS in the key, the arm64
+          # job restored the x86_64 job's cached cargo-tauri and tried to execute an Intel ELF
+          # on ARM, which the shell fell back to parsing as a script:
+          #     /home/runner/.cargo/bin/cargo-tauri: 1: Syntax error: ")" unexpected
+          # A cache key that is not unique per artifact does not fail to restore; it restores
+          # the wrong thing, and the error surfaces far from the cause.
+          key: tauri-cli-${{ env.TAURI_CLI_VERSION }}-${{ runner.os }}-${{ runner.arch }}
 
       - name: Install tauri-cli
         if: steps.cli-cache.outputs.cache-hit != 'true'
