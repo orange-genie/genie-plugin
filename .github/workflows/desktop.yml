@@ -78,6 +78,10 @@ jobs:
     # A hung compile otherwise sits on a runner until GitHub's 6-hour ceiling. These builds take
     # about 13 minutes; 45 is generous and still ends a stuck job the same day.
     timeout-minutes: 45
+    # IS SIGNING CONFIGURED? Decided once, here, because `secrets` cannot be read from a step's
+    # `if:` but CAN be read from job-level `env`. Everything below keys off this string.
+    env:
+      HAS_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' }}
     steps:
       # BUILD FROM THE BRANCH, UPLOAD TO THE TAG. The first run checked out the tag it was
       # asked to attach to — and that tag was cut BEFORE the app source existed, so every job
@@ -107,8 +111,13 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
+          # xdg-utils IS NOT OPTIONAL, it is just invisible on x86. The x64 runner image happens
+          # to preinstall it, so the .deb bundler found xdg-mime and nobody knew it was a
+          # dependency. The arm64 image does not, and the arm64 job died with "xdg-mime binary
+          # not found" after a full compile — a twelve-minute build to discover a missing
+          # four-line package. Listed explicitly so both architectures state the same needs.
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
-                                  patchelf libssl-dev build-essential curl wget file
+                                  patchelf libssl-dev build-essential curl wget file xdg-utils
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -138,19 +147,25 @@ jobs:
         if: steps.cli-cache.outputs.cache-hit != 'true'
         run: cargo install tauri-cli --version "${{ env.TAURI_CLI_VERSION }}" --locked
 
+      # ── TWO BUILD STEPS, BECAUSE "EMPTY" IS NOT "UNSET" ──────────────────────────────────
+      # The first version of this passed the APPLE_* variables unconditionally, assuming an
+      # unset secret would render as absent. It renders as the EMPTY STRING, and Tauri reads
+      # these with env::var, which returns Ok("") — indistinguishable from a real value. So it
+      # took the signing path with no certificate and the whole macOS job died at
+      #   failed to run command security import: failed to import keychain certificate
+      # after a twelve-minute compile. A variable that exists and is empty is a variable that
+      # is set. The only way to not set one is to not write it.
       - name: Build
+        if: "!(runner.os == 'macOS' && env.HAS_SIGNING == 'true')"
         working-directory: app/tauri
-        # SIGNING HAPPENS HERE OR IT DOES NOT HAPPEN.
-        # Tauri reads these itself and will import the certificate, sign with the hardened
-        # runtime, submit to Apple and staple the ticket as part of the bundle step. That is
-        # why there is no hand-rolled keychain scripting below: the less of this we write, the
-        # less of it can be subtly wrong.
-        #
-        # Every one of these is empty when the secret is unset, and an empty value makes Tauri
-        # fall back to an AD-HOC signature. That fallback is exactly how v0.2.0 shipped a macOS
-        # build that every user's Gatekeeper answered with "Genie 1 is damaged and can't be
-        # opened" — the build succeeded, the upload succeeded, and nothing anywhere failed.
-        # The verification step below is what turns that silence into a red job.
+        run: cargo tauri build ${{ matrix.args }}
+
+      # Tauri imports the certificate, signs with the hardened runtime, submits to Apple and
+      # staples the ticket as part of bundling. No hand-rolled keychain scripting: the less of
+      # this we write, the less of it can be subtly wrong.
+      - name: Build (macOS, signed and notarized)
+        if: runner.os == 'macOS' && env.HAS_SIGNING == 'true'
+        working-directory: app/tauri
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
