@@ -37,6 +37,7 @@ echo "  ✓ python3 $(python3 -c 'import platform;print(platform.python_version(
 mkdir -p "$DIR" "$BIN"
 for pair in \
   "cli/genie:genie" \
+  "cli/seed_cache.py:seed_cache.py" \
   "plugins/genie/tools/brain.py:brain.py" \
   "plugins/genie/tools/chain.sh:chain.sh" \
   "plugins/genie/tools/chain.py:chain.py" \
@@ -88,9 +89,58 @@ if grep -qi microsoft /proc/version 2>/dev/null; then
   fi
 fi
 
-# ── 4. tell them the truth about which brain they have ────────────────────────────────────
+# ── 4. THE LOCAL BRAIN — unlimited, free, and yours ───────────────────────────────────────
+# This used to print instructions and hope. Printing "you could install ollama" is not a
+# product: the user ends up on a metered cloud brain, which is neither unlimited nor private,
+# and goes down whenever someone else's bill does. So we install it.
+#
+# The model is sized to the MACHINE, not to a preference. An 8B model on a 4GB laptop swaps
+# itself to death and the user concludes Genie is broken. Smaller and instant beats bigger and
+# unusable — and the Mesh cheat sheet below is what closes the quality gap anyway.
+RAM_GB=$(python3 - <<'PY'
+import os
+try:
+    b = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
+    print(max(1, round(b / (1024**3))))
+except Exception:
+    print(8)
+PY
+)
+# Apache-2.0 weights only: we sell this, and Genie 1 is trained on Qwen2.5 (3B is NOT Apache, skipped).
+if   [ "$RAM_GB" -ge 16 ]; then MODEL="qwen2.5:7b"
+elif [ "$RAM_GB" -ge 8  ]; then MODEL="qwen2.5:1.5b"
+else                            MODEL="qwen2.5:0.5b"
+fi
 echo
-echo "⬢ Checking what brain this machine can reach…"
+echo "⬢ Local brain — ${RAM_GB}GB RAM detected, installing $MODEL"
+
+if ! command -v ollama >/dev/null 2>&1; then
+  echo "  installing ollama (this is the engine that runs the model on YOUR machine)…"
+  curl -fsSL https://ollama.com/install.sh | sh >/dev/null 2>&1 \
+    && echo "  ✓ ollama installed" \
+    || echo "  ! could not install ollama automatically — see https://ollama.com/download"
+fi
+if command -v ollama >/dev/null 2>&1; then
+  pgrep -x ollama >/dev/null 2>&1 || { nohup ollama serve >/dev/null 2>&1 & sleep 3; }
+  echo "  pulling $MODEL — this is a one-time download, then it is yours forever…"
+  ollama pull "$MODEL" 2>&1 | tail -1
+  printf '%s' "$MODEL" > "$DIR/.model"
+  echo "  ✓ $MODEL ready — unlimited, no key, no bill, nothing leaves this machine"
+fi
+
+# ── 4b. THE CHEAT SHEET — what makes a small local model punch above its size ──────────────
+# A 3B model does not know why a launchd job cannot find a Homebrew binary. The Mesh does,
+# because someone already solved it and inscribed the answer. Seeding the corpus locally is
+# what makes the local brain BETTER than a bigger model guessing from training data — and it
+# has to be LOCAL, or the whole thing stops working the moment the network does.
+echo
+echo "⬢ Mesh cheat sheet — pulling proven skills onto this machine…"
+mkdir -p "$HOME/.claude/genie"
+# Shared with install.ps1 — one seeder, so the two platforms cannot drift.
+python3 "$DIR/seed_cache.py" "$HOME/.claude/genie/chain_skills.jsonl" || true
+
+# ── 4c. what brain this machine actually has ──────────────────────────────────────────────
+echo
 python3 "$DIR/genie" providers || true
 
 cat <<'EOF'
@@ -106,11 +156,17 @@ cat <<'EOF'
      genie recall launchd
      genie providers
 
-   If no provider was reachable above, the free and private option is your own machine:
+   Your brain runs on THIS machine. No key, no bill, no rate limit, no request that
+   can be counted or cut off. It keeps answering with the network down.
 
-     ollama serve &
-     ollama pull hermes3
-     export GENIE_OLLAMA_MODEL=hermes3
+   It is also not alone: every answer is checked against the Mesh — the proven skills
+   other nodes have already inscribed. That cheat sheet is what lets a small local model
+   beat a much larger one that has to guess.
 
-   Nothing you type leaves your computer on that setting. Update any time with: genie update
+   Your work joins it:
+
+     genie recall <topic>        pull what the Mesh already knows
+     genie providers             see exactly where your words go
+
+   Update any time with: genie update
 EOF
