@@ -183,7 +183,7 @@ the standard; the existing `node_secret` (already on every node, chmod 600) shou
 authorized under that identity, not the identity itself.
 
 **Open gap in that spec:** it's browser-scoped (Phantom/MetaMask/WalletConnect via the modal in
-`wildflower-genesis/index.html` ~1302-1345). `chain.sh` is headless bash — no browser, no wallet.
+`mesh-genesis/index.html` ~1302-1345). `chain.sh` is headless bash — no browser, no wallet.
 Needs a one-time browser session that authorizes the node's `node_secret` as a device key.
 
 **Migration risk:** no marker on chain has a key bound today. The moment the server enforces

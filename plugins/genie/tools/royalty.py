@@ -41,13 +41,13 @@ CLI
     royalty.py top [n]                                                      # skills earning the most
 
 RECREATE
-    stdlib only. Reads authorship from ~/Genie/wildflower-genesis/genesis.skills.json
+    stdlib only. Reads authorship from ~/Genie/mesh-genesis/genesis.skills.json
     (block.data.author). Writes ~/.claude/genie/owed.json, the SAME ledger meter.sh accrues to --
     one ledger, never a parallel one.
 """
 import os, sys, json, collections
 
-CHAIN = os.path.expanduser("~/Genie/wildflower-genesis/genesis.skills.json")
+CHAIN = os.path.expanduser("~/Genie/mesh-genesis/genesis.skills.json")
 # Overridable so tests never touch the LIVE earnings ledger. A test row in a real payout ledger is
 # a fabricated balance, and a fabricated balance is a lie someone eventually gets paid on.
 OWED = os.path.expanduser(os.environ.get("GENIE_OWED", "~/.claude/genie/owed.json"))

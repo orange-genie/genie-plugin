@@ -38,7 +38,11 @@ import os, sys, shutil, subprocess, textwrap
 # and every sibling file (chain.sh, canon.md, genie_llm.py) was "missing" — while `import
 # brain` still worked, because Python resolves sys.path[0] separately. That split is what
 # made it look fine: asking worked, chain commands did not.
-HERE = os.path.dirname(os.path.realpath(__file__))
+# A frozen one-file build (the .dmg/.exe on the site) unpacks the bundle to a temp dir and
+# points __file__ inside it; sys._MEIPASS is the documented way to find that dir. Source and
+# curl-installed runs are unchanged, so the symlink reasoning above still holds for them.
+HERE = (sys._MEIPASS if getattr(sys, "frozen", False)
+        else os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, HERE)                     # brain.py sits beside this file
 CHAIN = os.path.join(HERE, "chain.sh")
 CANON = os.path.join(HERE, "canon.md")
@@ -219,6 +223,7 @@ def cmd_update():
     # already installed. They updated, saw ✓ on every line, and kept running the old command.
     # A self-updater that cannot update itself is the one bug that hides all the others.
     files = [("cli/genie", "genie"),
+             ("cli/seed_cache.py", "seed_cache.py"),
              ("plugins/genie/tools/brain.py", "brain.py"),
              ("plugins/genie/tools/chain.py", "chain.py"),
              ("plugins/genie/tools/chain.sh", "chain.sh"),

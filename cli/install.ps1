@@ -89,6 +89,7 @@ New-Item -ItemType Directory -Force -Path $Dir, $BinDir | Out-Null
 # on the Windows path depends on them.
 $files = @(
   @{ r = 'cli/genie';                            l = 'genie'            },
+  @{ r = 'cli/seed_cache.py';                    l = 'seed_cache.py'    },
   @{ r = 'plugins/genie/tools/brain.py';         l = 'brain.py'         },
   @{ r = 'plugins/genie/tools/chain.py';         l = 'chain.py'         },
   @{ r = 'plugins/genie/tools/chain.sh';         l = 'chain.sh'         },
@@ -142,6 +143,64 @@ public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wP
   [Native.W32]::SendMessageTimeout([IntPtr]0xffff, 0x1A, [UIntPtr]::Zero,
                                    'Environment', 2, 5000, [ref]$res) | Out-Null
 } catch { }
+
+# ── 4b. THE LOCAL BRAIN — unlimited, free, and theirs ────────────────────────────────────
+# Sized to the MACHINE, not to a preference. An 8B model on a low-RAM laptop swaps itself to
+# death and the user concludes Genie is broken. Smaller and instant beats bigger and unusable —
+# the Mesh cheat sheet below is what closes the quality gap anyway.
+$ramGB = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+# Apache-2.0 weights only: we sell this, and Genie 1 is trained on Qwen2.5 (3B is NOT Apache, skipped).
+$model = if ($ramGB -ge 16) { 'qwen2.5:7b' } elseif ($ramGB -ge 8) { 'qwen2.5:1.5b' } else { 'qwen2.5:0.5b' }
+Write-Host ''
+Write-Host "  Local brain - ${ramGB}GB RAM detected, installing $model" -ForegroundColor DarkYellow
+
+if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) {
+  Write-Host '  installing ollama (the engine that runs the model on YOUR machine)...'
+  try {
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+      winget install --id Ollama.Ollama --accept-source-agreements --accept-package-agreements --silent | Out-Null
+    }
+  } catch { }
+  # The installer does not refresh THIS session's PATH, so a freshly installed ollama is
+  # invisible to the very script that installed it. Add its known location by hand.
+  if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) {
+    $env:PATH = "$env:PATH;$env:LOCALAPPDATA\Programs\Ollama"
+  }
+}
+if (Get-Command ollama -ErrorAction SilentlyContinue) {
+  if (-not (Get-Process ollama -ErrorAction SilentlyContinue)) {
+    Start-Process ollama -ArgumentList 'serve' -WindowStyle Hidden
+    Start-Sleep -Seconds 3
+  }
+  Write-Host "  pulling $model - one-time download, then it is yours forever..."
+  & ollama pull $model 2>&1 | Select-Object -Last 1
+  # Genie 1 = this base + our trained adapter (a small file, published with the code).
+  if ($model -eq 'qwen2.5:7b') {
+    $g1 = 'https://github.com/orange-genie/genie-plugin/releases/download/genie-1-weights'
+    $t = Join-Path $env:TEMP ('genie1-' + [guid]::NewGuid())
+    New-Item -ItemType Directory -Path $t | Out-Null
+    try {
+      Invoke-WebRequest "$g1/genie1-lora.gguf" -OutFile (Join-Path $t 'genie1-lora.gguf') -UseBasicParsing
+      Invoke-WebRequest "$g1/Modelfile" -OutFile (Join-Path $t 'Modelfile') -UseBasicParsing
+      Push-Location $t; & ollama create genie-1 -f Modelfile 2>&1 | Out-Null; $ok = ($LASTEXITCODE -eq 0); Pop-Location
+      if ($ok) { $model = 'genie-1'; Write-Host '  + Genie 1 (trained) installed on top of it' }
+    } catch { }
+    Remove-Item -Recurse -Force $t -ErrorAction SilentlyContinue
+  }
+  Set-Content -Path (Join-Path $Dir '.model') -Value $model -Encoding ASCII
+  Write-Host "  + $model ready - unlimited, no key, no bill, nothing leaves this machine"
+} else {
+  Write-Host '  ! could not install ollama automatically - get it from https://ollama.com/download'
+}
+
+# ── 4c. THE CHEAT SHEET — why a small local model beats a bigger one ─────────────────────
+# Same shared seeder the Unix installer uses, so the two cannot drift.
+Write-Host ''
+Write-Host '  Mesh cheat sheet - pulling proven skills onto this machine...' -ForegroundColor DarkYellow
+$cacheDir = Join-Path $env:USERPROFILE '.claude\genie'
+New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
+& $py.Exe @($py.Pre) (Join-Path $Dir 'seed_cache.py') (Join-Path $cacheDir 'chain_skills.jsonl') 2>&1 |
+  ForEach-Object { Write-Host "$_" }
 
 # ── 5. prove it runs ─────────────────────────────────────────────────────────────────────
 Write-Host ''

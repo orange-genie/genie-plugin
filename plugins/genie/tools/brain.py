@@ -108,10 +108,10 @@ POOL_URL = os.environ.get("GENIE_POOL_URL", "")   # any OpenAI-compatible peer e
 # Groq rotates and deprecates model ids -- confirmed live 2026-07-12 against /openai/v1/models.
 # llama-3.3-70b-versatile is the proven one already running in cryptonovot; openai/gpt-oss-120b
 # and qwen/qwen3-32b were also live at build time. Override with GENIE_GROQ_MODEL.
-GROQ_MODEL = os.environ.get("GENIE_GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_MODEL = os.environ.get("GENIE_GROQ_MODEL", "openai/gpt-oss-120b")
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
-OLLAMA_MODEL = os.environ.get("GENIE_OLLAMA_MODEL", "llama3.1")
-POOL_MODEL = os.environ.get("GENIE_POOL_MODEL", "llama-3.3-70b")
+OLLAMA_MODEL = os.environ.get("GENIE_OLLAMA_MODEL", "qwen2.5")   # Apache-2.0: sellable under our name
+POOL_MODEL = os.environ.get("GENIE_POOL_MODEL", "openai/gpt-oss-120b")
 
 def _call_anthropic(system, user, max_tokens, env_files):
     k = _key("ANTHROPIC_API_KEY", env_files)
@@ -131,12 +131,52 @@ def _openai_chat(url, model, system, user, max_tokens, key=None, timeout=60):
                                       {"role": "user", "content": user}]}, h, timeout=timeout)
     return (d["choices"][0]["message"]["content"] or "").strip() or None
 
+# The hosted provider retires model ids without warning. On 2026-10-07 the old default went away, and
+# every free call quietly degraded to a paid tier. Now a 404 makes us ask /models for what's live,
+# pick the best from this list, cache it, and say so loudly. GENIE_GROQ_MODEL still wins when set.
+_GROQ_PREFER = ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]
+_GROQ_NOT_CHAT = re.compile(r"whisper|guard|orpheus|tts|safeguard", re.I)
+_GROQ_CACHE = os.path.expanduser("~/.claude/genie/groq_model.txt")
+
+def _groq_model():
+    if os.environ.get("GENIE_GROQ_MODEL"):
+        return GROQ_MODEL
+    try:
+        return open(_GROQ_CACHE).read().strip() or GROQ_MODEL
+    except OSError:
+        return GROQ_MODEL
+
+def _groq_heal(k, dead):
+    req = urllib.request.Request("https://api.groq.com/openai/v1/models",
+                                 headers={"authorization": f"Bearer {k}", "user-agent": "OrangeGenie/1.0"})
+    with urllib.request.urlopen(req, timeout=30, context=_SSL) as r:
+        live = {m["id"]: m.get("context_window") or 0 for m in json.loads(r.read())["data"]}
+    pick = next((m for m in _GROQ_PREFER if m in live and m != dead), None) or max(
+        (m for m in live if not _GROQ_NOT_CHAT.search(m) and m != dead and live[m] >= 8192),
+        key=lambda m: live[m], default=None)
+    if pick:
+        try:
+            with open(_GROQ_CACHE, "w") as f:
+                f.write(pick)
+        except OSError:
+            pass
+        sys.stderr.write(f"brain: groq model '{dead}' is retired -> healed to '{pick}' (cached)\n")
+    return pick
+
 def _call_groq(system, user, max_tokens, env_files):
     k = _key("GROQ_API_KEY", env_files)
     if not k:
         return None
-    return _openai_chat("https://api.groq.com/openai/v1/chat/completions",
-                        GROQ_MODEL, system, user, max_tokens, key=k)
+    url, model = "https://api.groq.com/openai/v1/chat/completions", _groq_model()
+    try:
+        return _openai_chat(url, model, system, user, max_tokens, key=k)
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+        healed = _groq_heal(k, model)
+        if not healed:
+            raise
+        return _openai_chat(url, healed, system, user, max_tokens, key=k)
 
 GENIE1_URL = os.environ.get("GENIE1_URL", "https://orangegenie-api-production.up.railway.app/v1")
 
@@ -232,7 +272,7 @@ def _call_ollama(system, user, max_tokens, env_files):
 PROVIDERS = {
     "anthropic": {"call": _call_anthropic, "egress": "CLOUD", "model": lambda: ANTHROPIC_MODEL,
                   "needs": "ANTHROPIC_API_KEY", "tier": "premium"},
-    "groq":      {"call": _call_groq,      "egress": "CLOUD", "model": lambda: GROQ_MODEL,
+    "groq":      {"call": _call_groq,      "egress": "CLOUD", "model": lambda: _groq_model(),
                   "needs": "GROQ_API_KEY",      "tier": "free"},
     # Hosted genie-1: no key, works on a bare install. egress is CLOUD and reported as such —
     # hiding which model runs underneath is branding; hiding that the words left the machine
@@ -251,6 +291,11 @@ PROVIDERS = {
 
 # Best-first when we're just picking whatever works. On the free path we prefer the user's own
 # machine and their pool over a corporate cloud -- that is the whole thesis, expressed as an order.
+# Genie 1 in its deployments, most capable first: hosted, then the local one (Pi or this machine).
+# Same product, two places to run it — so "Genie 1 is down" needs BOTH to be down, and neither
+# of them is metered. Nothing billed ever belongs in this list.
+_GENIE_DEPLOYMENTS = ["genie-1", "ollama"]
+
 _ORDER_PAID = ["anthropic", "groq", "pool", "ollama", "genie-1"]
 _ORDER_FREE = ["ollama", "pool", "genie-1", "groq", "anthropic"]
 
@@ -342,8 +387,19 @@ def brain(system, user, feature="chat", tier=None, provider=None, max_tokens=800
     user where their tokens went should pass meta=True -- the user is entitled to know whether
     the call left their machine, and to whom."""
     chosen, why = resolve(feature, tier, provider, env_files)
-    order = ([chosen] if chosen else []) + [p for p in (_ORDER_FREE if tier == "free" else _ORDER_PAID)
-                                            if p != chosen]
+    # NAMING A PROVIDER MUST NOT BE A SUGGESTION.
+    # This used to append the full paid order behind whatever the caller asked for, so
+    # provider="genie-1" read as "genie-1, and if it blinks, bill the metered API". A caller who
+    # names Genie 1 is choosing our own model ON PURPOSE — usually to stop being billed at all —
+    # and a silent failover to a paid provider is the exact surprise charge they were avoiding.
+    # So an explicit choice falls back only WITHIN the same product: hosted Genie 1, then the
+    # local deployment. If every Genie 1 is down the call returns None and the caller stays
+    # silent, which is the honest outcome. Automatic routing (no provider=) is unchanged.
+    if provider:
+        order = list(_GENIE_DEPLOYMENTS) if chosen in _GENIE_DEPLOYMENTS else [chosen]
+    else:
+        order = ([chosen] if chosen else []) + [p for p in (_ORDER_FREE if tier == "free" else _ORDER_PAID)
+                                                if p != chosen]
     avail = available(env_files)
     for p in order:
         if not avail.get(p):
@@ -373,7 +429,32 @@ def brain(system, user, feature="chat", tier=None, provider=None, max_tokens=800
 #
 # Same recall->inject pattern already proven in bots/cryptonovot/bot_engine.py answer(); lifted
 # here so EVERY provider inherits it.
-SKILLS_DB = os.path.expanduser("~/.claude/projects/-Users-yogi/memory/mansion/skills.db")
+# WHERE THE CHEAT SHEET LIVES.
+# This was hardcoded to one machine's account name ("-Users-yogi"), so on ANY other computer the
+# path did not exist, the local corpus was empty, and grounding silently fell back to the network.
+# That is the difference between "a local model made smarter by the Mesh" and "a local model that
+# stops being smart the moment our server has a bad day" — which is what a real user actually hit.
+#
+# Resolution order: explicit override, then this node's own install, then whatever project dir
+# exists on this machine. Never a literal username.
+def _find_skills_db():
+    env = os.environ.get("GENIE_SKILLS_DB")
+    if env:
+        return os.path.expanduser(env)
+    home = os.path.expanduser("~")
+    cand = [os.path.join(home, ".orangegenie", "skills.db")]          # what the installer seeds
+    proj = os.path.join(home, ".claude", "projects")
+    try:                                                              # a Claude Code install: any project dir
+        for d in sorted(os.listdir(proj)):
+            cand.append(os.path.join(proj, d, "memory", "mansion", "skills.db"))
+    except OSError:
+        pass
+    for p in cand:
+        if os.path.exists(p):
+            return p
+    return cand[0]                                                    # absent is fine — the mirror still grounds
+
+SKILLS_DB = _find_skills_db()
 
 # RETRIEVAL IS THE LOAD-BEARING PART, AND THE OBVIOUS IMPLEMENTATION IS WRONG.
 # The chain's original lookup (seal/build_db.py query) expanded the query through an intent/synonym
