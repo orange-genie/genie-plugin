@@ -194,6 +194,15 @@ post() { # post <src_id> <type> <symbol> <summary> <body> [data_json]
   payload="{\"marker\":$(esc "$mk"),\"src_id\":$(esc "$sid"),\"type\":$(esc "$typ"),\"symbol\":$(esc "$sym"),\"summary\":$(esc "$sum"),\"body\":$(esc "$bod")"
   # data is a raw JSON object (already valid JSON), not an escaped string — append only if given
   [ -n "$dat" ] && payload="$payload,\"data\":$dat"
+  # OWN KEY: if this machine holds the name's key (agent_key.py init), sign the write. A name whose
+  # key is bound on the Mesh is rejected unsigned, and only signed authors are paid.
+  if [ -f "$HOME/.claude/genie/keys/$mk.ed25519" ]; then
+    local _kd _sj; _kd="$(mktemp -d)"
+    printf '%s' "$sum" > "$_kd/s"; printf '%s' "$bod" > "$_kd/b"
+    _sj="$(python3 "$(dirname "${BASH_SOURCE[0]}")/agent_key.py" sign "$mk" "$sid" "$_kd/s" "$_kd/b" 2>/dev/null)"
+    rm -rf "$_kd"
+    [ -n "$_sj" ] && payload="$payload,$(printf '%s' "$_sj" | sed 's/^{//; s/}$//')"
+  fi
   payload="$payload}"
   # FAIL LOUD + DIFFERENTIATED. The old line was `curl -fsS ... 2>/dev/null || echo unreachable`,
   # which swallowed the server's real error and called EVERY failure "unreachable" — so a fixable

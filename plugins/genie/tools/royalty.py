@@ -10,13 +10,13 @@ THE ECONOMY THIS CLOSES (AUTO, 2026-07-12)
          that list on every response (`genie.skills`). Payout follows THAT list, not the feature
          name. A skill that grounds many answers earns more; one that grounds nothing earns
          nothing. That is rank-by-proven-merit expressed as money.
-      2. AUTHORSHIP — every skill block carries data.author, forced server-side to the node's
-         marker by chain.sh (unspoofable; you cannot bill under someone else's name).
+      2. AUTHORSHIP — every skill block carries data.author, and a write only counts as that
+         name's when it is signed with the name's own key (agent_key.py; checked server-side).
       3. CONSERVATION — value in = work out (Markopolos). Money only ever comes from a PAYING
          user's call. Nothing is minted. A free call pays nobody.
 
     WHERE THE FREE TIER'S MONEY COMES FROM — the honest answer, because "free" always has a payer:
-      • The COMPUTE for a free call is paid by the upstream's own free tier (e.g. Groq), not by us
+      • The COMPUTE for a free call is paid by the upstream's own free tier, not by us
         and not by paying users. It is rate-limited and it is their funnel, not our loss.
       • So a free call costs the treasury ~nothing and therefore owes nobody anything.
       • But it is NOT worthless to the authors: a free call still records a USE. Uses are the
@@ -85,7 +85,13 @@ def authors():
                     continue
                 slug = data.get("skill") or b.get("src_id")
                 if slug:
-                    _AUTHORS[slug] = (data.get("author") or "").strip()
+                    a = (data.get("author") or "").strip()
+                    # Only a SIGNED write proves the name (server sets data.verified, agent_key.py signs).
+                    # An unsigned name's share is HELD under "unverified:<name>": payable to that name
+                    # once its holder binds a key, never to whoever typed the name.
+                    if a and a != "genie" and not data.get("verified"):
+                        a = "unverified:" + a
+                    _AUTHORS[slug] = a
             # overlay: a claimed commons skill now belongs to the claimer (match by the block's src_id)
             for sid, claimer in claims.items():
                 if sid in _AUTHORS:
