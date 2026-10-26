@@ -2,7 +2,7 @@
 """genie_llm.py — a drop-in OpenAI endpoint whose brain is the OrangeGenie Mesh.
 
 THE PRODUCT IN ONE LINE
-    Point ANY existing tool at this URL instead of Groq's, and it gets the same fast open-weight
+    Point ANY existing tool at this URL instead of your current provider's, and it gets the same
     model -- except it now knows everything the chain has ever learned.
 
         client = OpenAI(base_url="http://localhost:8756/v1", api_key="anything")
@@ -13,11 +13,11 @@ THE PRODUCT IN ONE LINE
 
 WHY THIS IS THE RIGHT SHAPE (the economics, not the vibe)
     We do not train a model. We RENT the reasoning and OWN the memory.
-      • The base model is a commodity. Meta ships a better Llama, Groq serves it faster -- our
+      • The base model is a commodity. The open-weight frontier moves, hosts serve it faster -- our
         product improves for free, and we do nothing. We never pay to keep up.
       • The chain is the part we own, and it is the part that COMPOUNDS. Every skill added makes
         every future answer better, on every node, forever.
-    Anyone can call Groq. Nobody else has the chain. The moat is the notebook, not the brain.
+    Anyone can rent a commodity model. Nobody else has the chain. The moat is the notebook, not the brain.
 
 THE DISTILLATION LOOP (this is the engine, read it twice)
     1. A hard, genuinely novel problem gets solved on a FRONTIER model (Opus). Expensive. Correct.
@@ -26,7 +26,7 @@ THE DISTILLATION LOOP (this is the engine, read it twice)
        the skill before it reasons. Near-zero cost, frontier-grade accuracy.
     4. Frontier spend is therefore only ever needed for what is genuinely NEW -- which produces
        new skills -- which cheapens the next tier down. Loop.
-    Frontier models are the TEACHERS. The chain is the notebook. Groq is the student who never
+    Frontier models are the TEACHERS. The chain is the notebook. The cheap model is the student who never
     forgets. Our COGS falls as our quality rises. That curve runs backwards from everyone else's.
 
 PROVENANCE (Proof-of-Provenance, not decoration)
@@ -35,7 +35,7 @@ PROVENANCE (Proof-of-Provenance, not decoration)
     trust -- and a skill that grounds real answers is a skill that has earned its rank.
 
 HONESTY
-    This is a CLOUD endpoint. It forwards to Groq. Tokens leave the user's machine. It is fast and
+    This is a CLOUD endpoint. It forwards to a hosted upstream. Tokens leave the user's machine. It is fast and
     it is nearly free, but it is NOT local and NOT private, and this file will never say otherwise.
     Users who want privacy set GENIE_UPSTREAM to their own Ollama and get the identical chain
     grounding with zero egress -- the grounding is upstream-agnostic on purpose.
@@ -60,9 +60,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import brain   # BM25 chain retrieval + provider calls + the honest egress table
 
 PORT = int(os.environ.get("GENIE_LLM_PORT", "8756"))
-# Any OpenAI-compatible upstream. Groq by default; set to an Ollama shim for a zero-egress node.
+# Any OpenAI-compatible upstream. Hosted by default; set to an Ollama shim for a zero-egress node.
 UPSTREAM = os.environ.get("GENIE_UPSTREAM", "https://api.groq.com/openai/v1")
-UPSTREAM_MODEL = os.environ.get("GENIE_UPSTREAM_MODEL", "llama-3.3-70b-versatile")
+UPSTREAM_MODEL = os.environ.get("GENIE_UPSTREAM_MODEL", "openai/gpt-oss-120b")
 TOP_K = int(os.environ.get("GENIE_TOP_K", "4"))
 HARVEST = os.environ.get("GENIE_HARVEST", "") == "1"   # off by default. Opt-in only.
 PRICE_PER_CALL = float(os.environ.get("GENIE_PRICE_PER_CALL", "0.01"))   # what a PAID call earns
@@ -110,7 +110,7 @@ def _inject(messages, sheet):
 def _upstream(body):
     key = brain._key("GROQ_API_KEY") if "groq.com" in UPSTREAM else os.environ.get("GENIE_UPSTREAM_KEY")
     headers = {"content-type": "application/json",
-               # A real User-Agent is mandatory: Cloudflare-fronted APIs (Groq included) reject
+               # A real User-Agent is mandatory: Cloudflare-fronted APIs (ours included) reject
                # Python's default urllib UA at the edge with a non-JSON `403 error code: 1010`,
                # before the key is ever checked. See chain: cloudflare-1010-rejects-python-urllib.
                "user-agent": "OrangeGenie/1.0 (+https://orangegenie.bot)"}
@@ -123,7 +123,7 @@ def _upstream(body):
 
 
 # ── THE LOCK ───────────────────────────────────────────────────────────────
-# Without this, a public deploy is a free Groq key for anyone who finds the URL. Every call must
+# Without this, a public deploy is a free upstream key for anyone who finds the URL. Every call must
 # present an `og-` key; it maps to a chain marker, which is what the meter and the royalty ledger
 # key off. GENIE_OPEN=1 disables the lock — LOCAL DEV ONLY. Never set it on a public box.
 import subprocess as _sp
@@ -212,7 +212,7 @@ class H(BaseHTTPRequestHandler):
             return self._send(400, {"error": {"message": "bad json"}})
 
         # THE LOCK — no valid og- key, no inference. This is the only thing standing between a
-        # public URL and strangers spending our Groq budget.
+        # public URL and strangers spending our upstream budget.
         marker = _marker_for(self.headers.get("authorization"))
         if not marker:
             return self._send(401, {"error": {

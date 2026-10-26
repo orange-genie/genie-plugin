@@ -174,6 +174,19 @@ if (Get-Command ollama -ErrorAction SilentlyContinue) {
   }
   Write-Host "  pulling $model - one-time download, then it is yours forever..."
   & ollama pull $model 2>&1 | Select-Object -Last 1
+  # Genie 1 = this base + our trained adapter (a small file, published with the code).
+  if ($model -eq 'qwen2.5:7b') {
+    $g1 = 'https://github.com/orange-genie/genie-plugin/releases/download/genie-1-weights'
+    $t = Join-Path $env:TEMP ('genie1-' + [guid]::NewGuid())
+    New-Item -ItemType Directory -Path $t | Out-Null
+    try {
+      Invoke-WebRequest "$g1/genie1-lora.gguf" -OutFile (Join-Path $t 'genie1-lora.gguf') -UseBasicParsing
+      Invoke-WebRequest "$g1/Modelfile" -OutFile (Join-Path $t 'Modelfile') -UseBasicParsing
+      Push-Location $t; & ollama create genie-1 -f Modelfile 2>&1 | Out-Null; $ok = ($LASTEXITCODE -eq 0); Pop-Location
+      if ($ok) { $model = 'genie-1'; Write-Host '  + Genie 1 (trained) installed on top of it' }
+    } catch { }
+    Remove-Item -Recurse -Force $t -ErrorAction SilentlyContinue
+  }
   Set-Content -Path (Join-Path $Dir '.model') -Value $model -Encoding ASCII
   Write-Host "  + $model ready - unlimited, no key, no bill, nothing leaves this machine"
 } else {

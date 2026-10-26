@@ -124,6 +124,16 @@ if command -v ollama >/dev/null 2>&1; then
   pgrep -x ollama >/dev/null 2>&1 || { nohup ollama serve >/dev/null 2>&1 & sleep 3; }
   echo "  pulling $MODEL — this is a one-time download, then it is yours forever…"
   ollama pull "$MODEL" 2>&1 | tail -1
+  # Genie 1 = this base + our trained adapter (a small file, published with the code).
+  if [ "$MODEL" = "qwen2.5:7b" ]; then
+    G1="https://github.com/orange-genie/genie-plugin/releases/download/genie-1-weights"
+    T="$(mktemp -d)"
+    if curl -fsSL "$G1/genie1-lora.gguf" -o "$T/genie1-lora.gguf" && curl -fsSL "$G1/Modelfile" -o "$T/Modelfile" \
+       && (cd "$T" && ollama create genie-1 -f Modelfile >/dev/null 2>&1); then
+      MODEL="genie-1"; echo "  ✓ Genie 1 (trained) installed on top of it"
+    fi
+    rm -rf "$T"
+  fi
   printf '%s' "$MODEL" > "$DIR/.model"
   echo "  ✓ $MODEL ready — unlimited, no key, no bill, nothing leaves this machine"
 fi
