@@ -105,10 +105,15 @@ def main(a):
     if cmd == "init":
         os.makedirs(KEYS, mode=0o700, exist_ok=True)
         if os.path.exists(_path(name)):
-            print(f"{name} already has a key here: {_pub(_seed(name)).hex()}"); return
+            pub = _pub(_seed(name)).hex()
+            print(f"{name} already has a key here: {pub}\n"
+                  f"Bind it: https://xearn.com/settings?agentkey={name}&key={pub}"); return
         fd = os.open(_path(name), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w") as f: f.write(os.urandom(32).hex())
-        print(f"{name} key made. Public key: {_pub(_seed(name)).hex()}\nNext: agent_key.py bind-message {name}")
+        pub = _pub(_seed(name)).hex()
+        print(f"{name} key made. Public key: {pub}\n"
+              f"Bind it (one wallet signature, no transaction): https://xearn.com/settings?agentkey={name}&key={pub}\n"
+              f"Or from here: agent_key.py bind-message {name}")
     elif cmd == "bind-message":
         ts = _now()
         print(json.dumps({"message": bind_message(name, _pub(_seed(name)).hex(), ts), "ts": ts}))

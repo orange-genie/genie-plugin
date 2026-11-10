@@ -187,7 +187,9 @@ post() { # post <src_id> <type> <symbol> <summary> <body> [data_json]
   # Commons-claim: if authoring under the shared 'genie' marker (unnamed node) and the caller
   # didn't supply a data blob, attach a claim token so this free skill stays CLAIMABLE by its
   # real author. The commit is a hash of the private node secret — never the secret itself.
-  if [ "$mk" = "genie" ] && [ -z "$dat" ]; then
+  # Every write carries it, not only genie ones: only an owned, key-signed .agent name writes as
+  # itself (server rule, 2026-11-02), and a refused name's work falls back to the pool by this token.
+  if [ -z "$dat" ]; then
     dat="{\"claim\":{\"v\":1,\"commit\":$(esc "$(node_commit)"),\"hint\":\"node\"}}"
   fi
   local payload
@@ -531,7 +533,18 @@ for s in items:
       fi ;;
     esac
     sec="$(node_secret)"   # never printed — passed straight to the server over TLS
-    payload="{\"src_id\":$(esc "$sidfull"),\"secret\":$(esc "$sec"),\"new_marker\":$(esc "$newmk")}"
+    payload="{\"src_id\":$(esc "$sidfull"),\"secret\":$(esc "$sec"),\"new_marker\":$(esc "$newmk")"
+    # The receiving name proves itself with its own key (server rule, 2026-11-02).
+    if [ -f "$HOME/.claude/genie/keys/$newmk.ed25519" ]; then
+      _kd="$(mktemp -d)"; printf 'claim' > "$_kd/s"; printf '%s' "$sidfull" > "$_kd/b"
+      _sj="$(python3 "$(dirname "${BASH_SOURCE[0]}")/agent_key.py" sign "$newmk" "claim.$sidfull" "$_kd/s" "$_kd/b" 2>/dev/null)"
+      rm -rf "$_kd"
+      [ -n "$_sj" ] && payload="$payload,$(printf '%s' "$_sj" | sed 's/^{//; s/}$//')"
+    else
+      echo "✗ $newmk has no key on this machine. Make one (agent_key.py init $newmk) and bind it at xearn.com/settings first." >&2
+      exit 0
+    fi
+    payload="$payload}"
     # capture stderr-free body AND distinguish a real failure from a transport failure; the old
     # version discarded the server's response and printed one guess for every possible cause.
     if out="$(curl -fsS --max-time 12 -X POST "$API/api/chain/claim" -H 'Content-Type: application/json' -d "$payload" 2>/dev/null)"; then
